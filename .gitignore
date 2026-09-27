@@ -1,0 +1,50 @@
+# PlatformIO build output
+/.pio/
+/.pioenvs/
+
+# CMake and compiled output
+/build/
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+Makefile
+*.exe
+*.obj
+*.o
+*.a
+*.lib
+*.dll
+
+# IDE and editor state
+/.vscode/*
+!/.vscode/settings.json
+.vs/
+*.suo
+*.user
+*.sln
+*.vcxproj*
+
+# Operating system files
+Thumbs.db
+.DS_Store
+
+# Local project material and generated data
+/AGENTS.md
+/.codex
+/PCB/
+/docs/
+/html/
+/py/
+/testfiles/
+/tmp/
+
+# Audio files and conversion intermediates
+*.mdx
+*.MDX
+*.pdx
+*.PDX
+*.vgm
+*.vgz
+*.gd3
+*.tmp
+

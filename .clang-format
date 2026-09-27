@@ -1,0 +1,7 @@
+BasedOnStyle: Google
+AllowShortFunctionsOnASingleLine: None
+AllowShortBlocksOnASingleLine: Never
+BinPackArguments: true
+BinPackParameters: true
+Cpp11BracedListStyle: true
+ColumnLimit: 100

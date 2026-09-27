@@ -1,0 +1,435 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>VGM GD3 タグ エディタ</title>
+    <link rel="stylesheet" data-href="style.css" />
+    <script>
+      (function () {
+        var cacheBust = "v=" + Date.now();
+        var link = document.querySelector('link[rel="stylesheet"][data-href]');
+        if (link) {
+          link.href = link.getAttribute("data-href") + "?" + cacheBust;
+        }
+      })();
+    </script>
+  </head>
+  <body>
+
+    <main class="app">
+      <header class="header">
+        <div>
+          <div class="title">VGM GD3 タグ エディタ</div>
+          <div class="subtitle">GD3 編集マン</div>
+        </div>
+        <div class="status" id="status">VGM / VGZファイルを読み込んでください。</div>
+      </header>
+
+      <div class="layout">
+        <section class="panel left">
+          <div class="section">
+            <div class="section-title">ファイル</div>
+            <div class="field-row">
+              <label for="filePath">FilePath</label>
+              <input id="filePath" type="text" readonly value="" placeholder="未選択" />
+            </div>
+            <div class="field-row">
+              <label>File Size</label>
+              <div class="value" id="fileSize">-</div>
+            </div>
+          </div>
+
+          <div class="actions">
+            <label class="btn" for="fileInput">ファイルを開く</label>
+            <input id="fileInput" type="file" accept=".vgm,.vgz,.gz" />
+            <button class="btn ghost" id="saveBtn" disabled>保存</button>
+            <label class="checkbox inline">
+              <input type="checkbox" id="saveAsVgz" />
+              VGZ で保存
+            </label>
+          </div>
+
+          <div class="dropzone" id="dropZone">
+            ここに .vgm / .vgz ファイルをドラッグ＆ドロップ
+          </div>
+
+          <label class="checkbox">
+            <input type="checkbox" id="keepInputs" />
+            現在の入力内容を消さない
+          </label>
+
+          <div class="section">
+            <div class="section-title">ヘッダ情報</div>
+            <div class="info-list">
+              <div class="info-item">
+                <span>EoF offset</span>
+                <span id="eofOffset" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Version</span>
+                <span id="version" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Rate</span>
+                <span id="rate" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Total # samples</span>
+                <span id="totalSamples" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>GD3 offset</span>
+                <span id="gd3Offset" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Loop offset</span>
+                <span id="loopOffset" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Loop # samples</span>
+                <span id="loopSamples" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>VGM data offset</span>
+                <span id="vgmDataOffset" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Extra header offset</span>
+                <span id="extraHeaderOffset" class="value">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="section" id="playbackSection">
+            <div class="section-header">
+              <div class="section-title">再生設定</div>
+              <button class="section-toggle" type="button" aria-expanded="false" aria-controls="playbackContent">
+                <span class="toggle-icon">▼</span>
+              </button>
+            </div>
+            <div class="info-list is-hidden" id="playbackContent">
+              <div class="info-item">
+                <span>Volume modifier</span>
+                <span id="volumeModifier" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Loop base</span>
+                <span id="loopBase" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Loop modifier</span>
+                <span id="loopModifier" class="value">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="section" id="chipFlagsSection">
+            <div class="section-header">
+              <div class="section-title">チップフラグ</div>
+              <button class="section-toggle" type="button" aria-expanded="false" aria-controls="chipFlagsContent">
+                <span class="toggle-icon">▼</span>
+              </button>
+            </div>
+            <div class="info-list is-hidden" id="chipFlagsContent">
+              <div class="info-item">
+                <span>SN76489 feedback</span>
+                <span id="sn76489Feedback" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>SN76489 shift width</span>
+                <span id="sn76489Shift" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>SN76489 flags</span>
+                <span id="sn76489Flags" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>Sega PCM interface</span>
+                <span id="segaPcmInterface" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>AY8910 chip type</span>
+                <span id="ay8910Type" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>AY8910 flags</span>
+                <span id="ay8910Flags" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>YM2203/AY flags</span>
+                <span id="ym2203AyFlags" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>YM2608/AY flags</span>
+                <span id="ym2608AyFlags" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>OKIM6258 flags</span>
+                <span id="okim6258Flags" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>K054539 flags</span>
+                <span id="k054539Flags" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>C140 chip type</span>
+                <span id="c140Type" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>ES5503 channels</span>
+                <span id="es5503Channels" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>ES5505/ES5506 channels</span>
+                <span id="es5505Channels" class="value">-</span>
+              </div>
+              <div class="info-item">
+                <span>C352 clock divider</span>
+                <span id="c352Divider" class="value">-</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="section" id="clocksSection">
+            <div class="section-header">
+              <div class="section-title">チップクロック</div>
+              <button class="section-toggle" type="button" aria-expanded="false" aria-controls="clocksContent">
+                <span class="toggle-icon">▼</span>
+              </button>
+            </div>
+            <div class="clock-list is-hidden" id="clocksContent">
+              <div class="clock-item">
+                <span>YM2151 clock</span>
+                <span id="clkYM2151" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YM2203 clock</span>
+                <span id="clkYM2203" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YM2612 clock</span>
+                <span id="clkYM2612" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>AY8910 clock</span>
+                <span id="clkAY8910" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YM3812 clock</span>
+                <span id="clkYM3812" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YM3526 clock</span>
+                <span id="clkYM3526" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YM2608 clock</span>
+                <span id="clkYM2608" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>SN76489 clock</span>
+                <span id="clkSN76489" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YM2413 clock</span>
+                <span id="clkYM2413" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>Sega PCM clock</span>
+                <span id="clkSegaPCM" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>RF5C68 clock</span>
+                <span id="clkRF5C68" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YM2610/YM2610B clock</span>
+                <span id="clkYM2610" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>Y8950 clock</span>
+                <span id="clkY8950" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YMF262 clock</span>
+                <span id="clkYMF262" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YMF278B clock</span>
+                <span id="clkYMF278B" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YMF271 clock</span>
+                <span id="clkYMF271" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>YMZ280B clock</span>
+                <span id="clkYMZ280B" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>RF5C164 clock</span>
+                <span id="clkRF5C164" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>PWM clock</span>
+                <span id="clkPWM" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>GameBoy DMG clock</span>
+                <span id="clkGameBoy" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>NES APU clock</span>
+                <span id="clkNESAPU" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>MultiPCM clock</span>
+                <span id="clkMultiPCM" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>uPD7759 clock</span>
+                <span id="clkUPD7759" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>OKIM6258 clock</span>
+                <span id="clkOKIM6258" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>OKIM6295 clock</span>
+                <span id="clkOKIM6295" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>K051649/K052539 clock</span>
+                <span id="clkK051649" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>K054539 clock</span>
+                <span id="clkK054539" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>HuC6280 clock</span>
+                <span id="clkHuC6280" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>C140 clock</span>
+                <span id="clkC140" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>K053260 clock</span>
+                <span id="clkK053260" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>Pokey clock</span>
+                <span id="clkPokey" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>QSound clock</span>
+                <span id="clkQSound" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>SCSP clock</span>
+                <span id="clkSCSP" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>WonderSwan clock</span>
+                <span id="clkWonderSwan" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>VSU clock</span>
+                <span id="clkVSU" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>SAA1099 clock</span>
+                <span id="clkSAA1099" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>ES5503 clock</span>
+                <span id="clkES5503" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>ES5505/ES5506 clock</span>
+                <span id="clkES5505" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>X1-010 clock</span>
+                <span id="clkX1010" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>C352 clock</span>
+                <span id="clkC352" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>GA20 clock</span>
+                <span id="clkGA20" class="value">-</span>
+              </div>
+              <div class="clock-item">
+                <span>Mikey clock</span>
+                <span id="clkMikey" class="value">-</span>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section class="panel right">
+          <div class="section-title">GD3 タグ</div>
+          <div class="gd3-grid">
+            <div class="field-row">
+              <label for="gd3-0">トラック名（英）</label>
+              <input id="gd3-0" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-1">トラック名（日）</label>
+              <input id="gd3-1" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-2">ゲーム名（英）</label>
+              <input id="gd3-2" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-3">ゲーム名（日）</label>
+              <input id="gd3-3" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-4">システム名（英）</label>
+              <input id="gd3-4" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-5">システム名（日）</label>
+              <input id="gd3-5" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-6">作曲者（英）</label>
+              <input id="gd3-6" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-7">作曲者（日）</label>
+              <input id="gd3-7" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-8">リリース日</label>
+              <input id="gd3-8" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-9">VGM変換者</label>
+              <input id="gd3-9" type="text" />
+            </div>
+            <div class="field-row">
+              <label for="gd3-10">ノート</label>
+              <textarea id="gd3-10" rows="5"></textarea>
+            </div>
+          </div>
+        </section>
+      </div>
+    </main>
+
+    <script>
+      (function () {
+        var cacheBust = "v=" + Date.now();
+        var script = document.createElement("script");
+        script.src = "app.js" + "?" + cacheBust;
+        document.body.appendChild(script);
+      })();
+    </script>
+  </body>
+</html>
