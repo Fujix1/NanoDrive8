@@ -9,15 +9,6 @@
 #include "nd.h"
 #include "vgm.h"
 
-#ifndef ND_DEBUG_ENCODER
-#define ND_DEBUG_ENCODER 0
-#endif
-
-#if ND_DEBUG_ENCODER
-#define ENCODER_DEBUG_PRINTF(...) Serial.printf(__VA_ARGS__)
-#else
-#define ENCODER_DEBUG_PRINTF(...)
-#endif
 static TimerHandle_t keyRepeatTimer = nullptr;
 enum class KeyRepeatState : u8_t { Idle, Waiting, Repeating };
 static volatile KeyRepeatState keyRepeatState = KeyRepeatState::Idle;
@@ -43,10 +34,7 @@ static constexpr u8_t kEncoderBufferSize = 64;
 static constexpr u8_t kEncoderBufferMask = kEncoderBufferSize - 1;
 // 1ノッチは通常4遷移。ISRが1遷移だけ取り逃した場合も通常操作として受理する。
 static constexpr int8_t kEncoderMinTicksPerStep = 3;
-// 途中状態を別の操作へ持ち越さないための無入力タイムアウト。
-static constexpr uint32_t kEncoderPartialTimeoutUs = 500000;
 static volatile u8_t encoderBuffer[kEncoderBufferSize];
-static volatile uint32_t encoderTimestampUs[kEncoderBufferSize];
 static volatile u8_t encoderBufferHead = 0;
 static volatile u8_t encoderBufferTail = 0;
 static volatile u8_t encoderIsrLastState = 0;
@@ -54,8 +42,6 @@ static volatile u16_t encoderOverflowCount = 0;
 static int8_t encoderStepAccumulator = 0;
 static int8_t encoderAlternateAccumulator = 0;
 static bool encoderHasAlternatePath = false;
-static uint32_t encoderLastSampleUs = 0;
-static uint32_t encoderDispatchCount = 0;
 
 // TCA8418
 Adafruit_TCA8418 keypad;
@@ -192,7 +178,6 @@ void IRAM_ATTR encoderGpioIrq() {
   }
 
   encoderBuffer[encoderBufferHead] = state;
-  encoderTimestampUs[encoderBufferHead] = micros();
   encoderBufferHead = nextHead;
   encoderIsrLastState = state;
   encoderDirty = true;
@@ -210,22 +195,13 @@ static void resetEncoderState() {
   encoderStepAccumulator = 0;
   encoderAlternateAccumulator = 0;
   encoderHasAlternatePath = false;
-  encoderLastSampleUs = micros();
   encoderStateInitialized = true;
   encoderDirty = false;
-  ENCODER_DEBUG_PRINTF("[ENC RESET] us=%lu ab=%u%u\n",
-                       static_cast<unsigned long>(encoderLastSampleUs), (state >> 1) & 1,
-                       state & 1);
 }
 
 // 回転方向を現在の画面に応じた入力へ変換する。
 static void dispatchEncoderStep(int8_t direction) {
   if (direction == 0) return;
-
-  const uint32_t dispatchId = ++encoderDispatchCount;
-  const uint32_t startedAtUs = micros();
-  const char* target = "ignored";
-  bool result = false;
 
   // 曲ロードや画面更新中の回転は蓄積しない。処理完了後に現在相へ再同期する。
   const bool restoreEncoder = encoderEnabled;
@@ -242,14 +218,11 @@ static void dispatchEncoderStep(int8_t direction) {
   switch (disp.currentView) {
     case ViewMode::Player:
     case ViewMode::Visual:
-      target = direction > 0 ? "file-next" : "file-prev";
-      result = ndFile.filePlay(direction > 0 ? 1 : -1);
+      ndFile.filePlay(direction > 0 ? 1 : -1);
       break;
     case ViewMode::Config:
     case ViewMode::Browser:
-      target = direction > 0 ? "event-down" : "event-up";
       sendEventToQueue(direction > 0 ? event::Down : event::Up);
-      result = xQueueInput != nullptr;
       break;
     default:
       break;
@@ -259,10 +232,6 @@ static void dispatchEncoderStep(int8_t direction) {
     resetEncoderState();
     encoderEnabled = true;
   }
-  ENCODER_DEBUG_PRINTF("[ENC APPLY] id=%lu dir=%+d target=%s result=%s elapsed_us=%lu\n",
-                       static_cast<unsigned long>(dispatchId), direction, target,
-                       result ? "ok" : "failed",
-                       static_cast<unsigned long>(micros() - startedAtUs));
 }
 
 // AB 相の状態遷移から回転方向を取り出す。
@@ -277,14 +246,11 @@ static void pollEncoder() {
   };
 
   int8_t latestDirection = 0;
-  u8_t processedCount = 0;
 
   // 先に通知を下ろすことで、走査終了直後にISRが追加したデータのdirtyを消さない。
   encoderDirty = false;
 
   if (encoderOverflowCount != 0) {
-    ENCODER_DEBUG_PRINTF("[ENC OVERFLOW] dropped=%u head=%u tail=%u\n", encoderOverflowCount,
-                         encoderBufferHead, encoderBufferTail);
     // 途中の遷移が失われているため、残った断片から方向を推測せず現在のAB相へ再同期する。
     resetEncoderState();
     return;
@@ -293,38 +259,12 @@ static void pollEncoder() {
   while (encoderBufferTail != encoderBufferHead) {
     const u8_t tail = encoderBufferTail;
     const u8_t currentState = encoderBuffer[tail];
-    const uint32_t timestampUs = encoderTimestampUs[tail];
     encoderBufferTail = (encoderBufferTail + 1) & kEncoderBufferMask;
-    processedCount++;
 
-    const u8_t previousState = encoderPrevState;
-    const int8_t accumulatorBefore = encoderStepAccumulator;
-    const int8_t alternateBefore = encoderAlternateAccumulator;
-    const bool hadAlternatePath = encoderHasAlternatePath;
     const int8_t transition =
         transitionTable[((encoderPrevState & 0b11) << 2) | (currentState & 0b11)];
-    const uint32_t intervalUs = timestampUs - encoderLastSampleUs;
-    encoderLastSampleUs = timestampUs;
-
-    if (intervalUs > kEncoderPartialTimeoutUs &&
-        (encoderStepAccumulator != 0 || encoderHasAlternatePath)) {
-      ENCODER_DEBUG_PRINTF("[ENC STALE] dt=%lu acc=%d/%d paths=%u new-detent=%u%u\n",
-                           static_cast<unsigned long>(intervalUs), encoderStepAccumulator,
-                           encoderAlternateAccumulator, encoderHasAlternatePath ? 2 : 1,
-                           (previousState >> 1) & 1, previousState & 1);
-      encoderStepAccumulator = 0;
-      encoderAlternateAccumulator = 0;
-      encoderHasAlternatePath = false;
-    }
 
     if (transition == 0 && currentState == encoderPrevState) {
-      ENCODER_DEBUG_PRINTF(
-          "[ENC RAW] us=%lu dt=%lu ab=%u%u>%u%u delta=0 acc=%d/%d(%u)>%d/%d(%u) "
-          "verdict=duplicate\n",
-          static_cast<unsigned long>(timestampUs), static_cast<unsigned long>(intervalUs),
-          (previousState >> 1) & 1, previousState & 1, (currentState >> 1) & 1, currentState & 1,
-          accumulatorBefore, alternateBefore, hadAlternatePath ? 2 : 1, encoderStepAccumulator,
-          encoderAlternateAccumulator, encoderHasAlternatePath ? 2 : 1);
       continue;
     }
 
@@ -332,25 +272,16 @@ static void pollEncoder() {
       // A/B同時変化は、途中の1状態をISRが拾えなかった2遷移として扱う。
       // ±2の両候補を保持し、続く遷移で一方だけが確定閾値へ達した場合に採用する。
       // 1クリック内で2回曖昧になった場合は方向を一意に決められないため破棄する。
-      const char* verdict = "diagonal-pending";
       if (encoderHasAlternatePath) {
         encoderStepAccumulator = 0;
         encoderAlternateAccumulator = 0;
         encoderHasAlternatePath = false;
-        verdict = "diagonal-rejected";
       } else {
         encoderAlternateAccumulator = encoderStepAccumulator - 2;
         encoderStepAccumulator += 2;
         encoderHasAlternatePath = true;
       }
       encoderPrevState = currentState;
-      ENCODER_DEBUG_PRINTF(
-          "[ENC RAW] us=%lu dt=%lu ab=%u%u>%u%u delta=?2 acc=%d/%d(%u)>%d/%d(%u) "
-          "verdict=%s\n",
-          static_cast<unsigned long>(timestampUs), static_cast<unsigned long>(intervalUs),
-          (previousState >> 1) & 1, previousState & 1, (currentState >> 1) & 1, currentState & 1,
-          accumulatorBefore, alternateBefore, hadAlternatePath ? 2 : 1, encoderStepAccumulator,
-          encoderAlternateAccumulator, encoderHasAlternatePath ? 2 : 1, verdict);
       continue;
     }
 
@@ -360,7 +291,6 @@ static void pollEncoder() {
     }
     encoderPrevState = currentState;
 
-    const char* verdict = "partial";
     const bool primaryPositive = encoderStepAccumulator <= -kEncoderMinTicksPerStep;
     const bool primaryNegative = encoderStepAccumulator >= kEncoderMinTicksPerStep;
     const bool alternatePositive =
@@ -370,10 +300,8 @@ static void pollEncoder() {
 
     if ((primaryPositive || alternatePositive) && !(primaryNegative || alternateNegative)) {
       latestDirection = 1;
-      verdict = "step+";
     } else if ((primaryNegative || alternateNegative) && !(primaryPositive || alternatePositive)) {
       latestDirection = -1;
-      verdict = "step-";
     }
 
     if (latestDirection != 0) {
@@ -382,28 +310,13 @@ static void pollEncoder() {
       encoderHasAlternatePath = false;
     }
 
-    ENCODER_DEBUG_PRINTF(
-        "[ENC RAW] us=%lu dt=%lu ab=%u%u>%u%u delta=%+d acc=%d/%d(%u)>%d/%d(%u) "
-        "verdict=%s\n",
-        static_cast<unsigned long>(timestampUs), static_cast<unsigned long>(intervalUs),
-        (previousState >> 1) & 1, previousState & 1, (currentState >> 1) & 1, currentState & 1,
-        transition, accumulatorBefore, alternateBefore, hadAlternatePath ? 2 : 1,
-        encoderStepAccumulator, encoderAlternateAccumulator, encoderHasAlternatePath ? 2 : 1,
-        verdict);
-
     if (latestDirection != 0) {
       // 1ノッチ確定後は残りの遷移を解釈しない。dispatchEncoderStep()で
       // ISRバッファごと現在のAB相へ再同期し、1操作から複数判定されるのを防ぐ。
-      const u8_t bufferedCount = (encoderBufferHead - encoderBufferTail) & kEncoderBufferMask;
-      ENCODER_DEBUG_PRINTF("[ENC CONFIRM] dir=%+d samples=%u buffered=%u\n", latestDirection,
-                           processedCount, bufferedCount);
       break;
     }
   }
 
-  if (processedCount != 0) {
-    ENCODER_DEBUG_PRINTF("[ENC POLL] samples=%u dispatch=%+d\n", processedCount, latestDirection);
-  }
   dispatchEncoderStep(latestDirection);
 }
 
@@ -639,10 +552,6 @@ bool Input::init() {
   pinMode(kEncoderPinA, INPUT);
   pinMode(kEncoderPinB, INPUT);
   resetEncoderState();
-  ENCODER_DEBUG_PRINTF(
-      "[ENC CONFIG] decoder=threshold-v3 min_ticks=%d stale_us=%lu "
-      "reverse_recovery=off\n",
-      kEncoderMinTicksPerStep, static_cast<unsigned long>(kEncoderPartialTimeoutUs));
   attachInterrupt(digitalPinToInterrupt(kEncoderPinA), encoderGpioIrq, CHANGE);
   attachInterrupt(digitalPinToInterrupt(kEncoderPinB), encoderGpioIrq, CHANGE);
 
