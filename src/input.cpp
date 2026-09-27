@@ -635,9 +635,9 @@ bool Input::init() {
   // xTaskCreateUniversal(inputTask, "inputTask", 10000, NULL, 1, NULL,
   // PRO_CPU_NUM);
 
-  // ロータリーエンコーダーの入力
-  pinMode(kEncoderPinA, INPUT_PULLUP);
-  pinMode(kEncoderPinB, INPUT_PULLUP);
+  // 外付けプルアップとRCフィルターを使用するため、内部プルアップは無効にする。
+  pinMode(kEncoderPinA, INPUT);
+  pinMode(kEncoderPinB, INPUT);
   resetEncoderState();
   ENCODER_DEBUG_PRINTF(
       "[ENC CONFIG] decoder=threshold-v3 min_ticks=%d stale_us=%lu "
