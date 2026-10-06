@@ -31,9 +31,6 @@ struct MDXTrackState {
   u16_t waitTicks;      // 待ち時間カウント
   bool syncWait;        // sync wait (W)
   bool active;          // 演奏中
-  u32_t loopStack[16];  //
-  u8_t loopCount[16];   // ループ回数
-  u8_t sp;              // ループのスタックポインタ
   u16_t keyOffTicks;    // S001b (gate) counter, decremented in L0011b4
 
   u8_t con_fl;        // 音色設定時のときのCON/FL
@@ -135,11 +132,6 @@ struct MDXTrackState {
     syncWait = false;
     keyOffTicks = 0;
     active = false;
-    for (int j = 0; j < 16; j++) {
-      loopStack[j] = 0;
-      loopCount[j] = 0;
-    }
-    sp = 0;
 
     keyOnDelayCounter = 0;
     keyOnPending = false;

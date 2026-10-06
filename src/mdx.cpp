@@ -774,7 +774,7 @@ bool MDXClass::ready() {
           case 0xea: {
             if (pc >= ndFile.size) return 0;
             u8_t d2 = ndFile.get_ui8_at(pc++);
-            if (d2 >= 2) {
+            if (!(d2 & 0x80)) {
               if (pc + 3 >= ndFile.size) return 0;
               pc += 4;
             }
@@ -794,8 +794,8 @@ bool MDXClass::ready() {
                 pc += 1;
                 break;
               case 0x02:
-                if (pc + 6 >= ndFile.size) return 0;
-                pc += 7;
+                if (pc + 5 >= ndFile.size) return 0;
+                pc += 6;
                 break;
               default:
                 break;
@@ -851,8 +851,8 @@ bool MDXClass::ready() {
     }
   }
   mxdrv16y = voiceDataEndDetected && (voiceDataEnd > voiceDataOffset);
-  Serial.printf("Voice Data Offset: 0x%x, End: 0x%x (%s)\n", voiceDataOffset, voiceDataEnd,
-                mxdrv16y ? "MXDRV16y" : "default");
+  // Serial.printf("Voice Data Offset: 0x%x, End: 0x%x (%s)\n", voiceDataOffset, voiceDataEnd,
+  //               mxdrv16y ? "MXDRV16y" : "default");
 
   // 変換テーブル初期化
   memset(voiceTable, 0xff, 256);
@@ -993,7 +993,7 @@ bool MDXClass::ready() {
   Node* currentDirNode = ndFile.currentNode->parent;
   u32_t maxFiles = currentDirNode->fileCount;
   String currentDir = truncateUtf8WithEllipsis(fileTree.getFullPath(currentDirNode),
-                                                MDX_PLAYER_PATH_MAX_CHARACTERS);
+                                               MDX_PLAYER_PATH_MAX_CHARACTERS);
 
   String pdx = "";
   if (ndFile.pdxName != "") {
@@ -1775,78 +1775,66 @@ void MDXClass::processTick() {
             // Serial.printf("キーオフ無効\n");
             break;
           }
-          case 0xf6: {  // リピート開始 ($F6 [回数] [00])
-            u8_t times = ndFile.get_ui8_at(tracks[i].pc++);
-            ndFile.get_ui8_at(tracks[i].pc++);
-
-            u8_t sp = tracks[i].sp;
-            if (sp < 8) {
-              tracks[i].loopCount[sp] = times;
-              tracks[i].loopStack[sp] = tracks[i].pc;  // 戻り先を保存
-              tracks[i].sp++;
+          case 0xf6: {  // リピート開始 ($F6 [回数] [作業用カウンター])
+            if (ndFile.size - tracks[i].pc < 2) {
+              tracks[i].pc = parseDataEnd;
+              break;
             }
-            // Serial.printf("ch%d 0x%x リピート開始: %d回\n", i, pos, times);
+            // MXDRV: MDX のメモリ上に回数をコピーする。曲の再読込で元データに戻る。
+            const u8_t times = ndFile.get_ui8_at(tracks[i].pc++);
+            ndFile.data[tracks[i].pc++] = times;
             break;
           }
           case 0xf5: {  // リピート終端 ($F5 [オフセット(16bit)])
-            s16_t offset = (s16_t)ndFile.get_ui16_be_at(tracks[i].pc);
-            tracks[i].pc += 2;
-
-            if (tracks[i].sp == 0) {
+            if (ndFile.size - tracks[i].pc < 2) {
+              tracks[i].pc = parseDataEnd;
               break;
             }
-
-            u8_t sp = tracks[i].sp - 1;
-            bool repeatContinue = false;
-            if (tracks[i].loopCount[sp] > 1) {
-              // 残り回数があるならデクリメントして戻る
-              tracks[i].loopCount[sp]--;
-              repeatContinue = true;
-            } else if (tracks[i].loopCount[sp] == 0) {
-              // 回数0は無限ループ
-              repeatContinue = true;
-            } else {
-              // ループ終了。スタックを戻す
-              tracks[i].sp--;
+            const s16_t offset = (s16_t)ndFile.get_ui16_be_at(tracks[i].pc);
+            tracks[i].pc += 2;
+            const s32_t target = (s32_t)tracks[i].pc + offset;
+            // 分岐先の直前がカウンター。F6 を経由しない分岐や正方向の offset も扱う。
+            if (target <= 0 || (u32_t)target > ndFile.size) {
+              tracks[i].pc = parseDataEnd;
+              break;
             }
-
-            if (repeatContinue) {
+            u8_t& counter = ndFile.data[target - 1];
+            counter = (u8_t)(counter - 1);  // 0 は 255 に戻るため、初期値 0 なら 256 回。
+            if (counter != 0) {
+              // ND の曲周回判定は維持する。
               const bool followedByTrackEnd =
                   (tracks[i].pc + 1 < parseDataEnd && ndFile.get_ui8_at(tracks[i].pc) == 0xf1 &&
                    ndFile.get_ui8_at(tracks[i].pc + 1) == 0x00);
-
               if (followedByTrackEnd) {
                 countTrackLoop(i);
               }
-
-              // DD1_00-style trap: F6 00 00 then F5 at the exact loop entry.
-              // In that narrow case, follow the encoded offset to escape dummy
-              // loop.
-              if (mxdrv16y && tracks[i].loopCount[sp] == 0 && tracks[i].loopStack[sp] == pos) {
-                tracks[i].pc += offset;
-              } else {
-                tracks[i].pc = tracks[i].loopStack[sp];
-              }
+              tracks[i].pc = (u32_t)target;
             }
-            // Serial.printf("ch%d 0x%x リピート終端: offset=0x%x\n", i, pos,
-            // (u16_t)offset);
             break;
           }
           case 0xf4: {  // リピート脱出 ($F4 [オフセット(16bit)])
-            s16_t forward = (s16_t)ndFile.get_ui16_be_at(tracks[i].pc);
-            tracks[i].pc += 2;
-
-            if (tracks[i].sp == 0) {
+            if (ndFile.size - tracks[i].pc < 2) {
+              tracks[i].pc = parseDataEnd;
               break;
             }
-
-            u8_t sp = tracks[i].sp - 1;
-            // 最後のループ回（残り1回）の時だけ、このコマンドでループを抜ける
-            if (tracks[i].loopCount[sp] == 1) {
-              tracks[i].sp--;
-              tracks[i].pc += forward + 2;  // 飛び先が 0xF5 nn nn なので
+            const s16_t forward = (s16_t)ndFile.get_ui16_be_at(tracks[i].pc);
+            tracks[i].pc += 2;
+            // F4 の参照先は F5 のオペランド。そこにある offset から残り回数を読む。
+            const s32_t operand = (s32_t)tracks[i].pc + forward;
+            if (operand < 0 || (u32_t)operand + 1 >= ndFile.size) {
+              tracks[i].pc = parseDataEnd;
+              break;
             }
-            // Serial.printf("ch%d 0x%x リピート脱出: 0x%x\n", i, pos, forward);
+            const u32_t afterRepeat = (u32_t)operand + 2;
+            const s16_t offset = (s16_t)ndFile.get_ui16_be_at((u32_t)operand);
+            const s32_t target = (s32_t)afterRepeat + offset;
+            if (target <= 0 || (u32_t)target > ndFile.size) {
+              tracks[i].pc = parseDataEnd;
+              break;
+            }
+            if (ndFile.get_ui8_at((u32_t)target - 1) == 1) {
+              tracks[i].pc = afterRepeat;
+            }
             break;
           }
           case 0xf3: {  // デチューン
