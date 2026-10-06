@@ -142,6 +142,7 @@ bool VGM::ready() {
   okim6258.vgmBlockDcRemoval.reserve(512);
 
   //
+  /*
   Serial.printf("Heap - %'d Bytes free, Min free heap %'d\n", ESP.getFreeHeap(),
                 ESP.getMinFreeHeap());
   Serial.printf("PSRAM - Total %'d, Free %'d, Min free %'d\n", ESP.getPsramSize(),
@@ -150,6 +151,7 @@ bool VGM::ready() {
                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   Serial.printf("PSRAM largest free block - %'d\n",
                 heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+                */
   //
 
   // ND::fileFormat = FileFormat::Unknown;
@@ -177,8 +179,6 @@ bool VGM::ready() {
   if (ndFile.get_ui32_at_header(0) != 0x206d6756) {
     if (ndFile.get_ui16_at_header(0) != 0x1f8b) {
       lcd.printf("ERROR: The file is VGZ archive. Extract it and add a .vgm extension.\n");
-      Serial.println("ERROR: VGZファイルです。解凍してください。");
-
     } else {
       lcd.printf("ERROR: File format is not VGM.\n");
       Serial.println("ERROR: VGM以外のファイルです。");
@@ -405,13 +405,6 @@ bool VGM::ready() {
     portENTER_CRITICAL(&okim6258Mux);
     okim6258.state.cache.clear();
     portEXIT_CRITICAL(&okim6258Mux);
-
-    Serial.printf("OKIM6258 初期ステート:\n");
-    Serial.printf("  周波数: %u Hz\n", okim6258_clock);
-    Serial.printf("  分周: %u\n", okim6258.state.divider);
-    // Serial.printf("  サンプリングレート: %f Hz\n", okim6258.state.samplingRate);
-    Serial.printf("  ヘッダADPCMビット数: %u (実データ処理: 4bit)\n", okim6258.state.adpcmBits);
-    Serial.printf("  パン: 0x%02X\n", okim6258.state.pan);
   }
 
   // VGM先頭に並ぶデータブロックは、再生時計を開始する前にDC偏りを検査する。
@@ -437,10 +430,6 @@ bool VGM::ready() {
         }
       }
       scanPos = blockStart + dataSize;
-    }
-    if (!okim6258.vgmBlockDcRemoval.empty()) {
-      Serial.printf("VGM ADPCM DC removal blocks: %u / %u\n", dcRemovalBlocks,
-                    (u32_t)okim6258.vgmBlockDcRemoval.size());
     }
   }
 
@@ -498,11 +487,7 @@ bool VGM::ready() {
 
   startTick = micros64() + 1000;
   ND::canPlay = true;  // VGM 開始できる
-  Serial.printf("Ready heap - Free %'d, Min free %'d, Largest block %'d\n", ESP.getFreeHeap(),
-                ESP.getMinFreeHeap(), heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
-  Serial.printf("Ready PSRAM - Free %'d, Min free %'d, Largest block %'d\n", ESP.getFreePsram(),
-                heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM),
-                heap_caps_get_largest_free_block(MALLOC_CAP_SPIRAM));
+
   return true;
 }
 

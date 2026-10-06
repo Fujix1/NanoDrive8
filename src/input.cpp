@@ -454,7 +454,7 @@ void tcaTask(void* arg) {
       } else if ((key & 0x01) == 1) {  // カラム1
         if (k & 0x80) {
           u8_t ch = (key / 10) % 10;
-          Serial.printf("ch: %d\n", ch);
+          // Serial.printf("ch: %d\n", ch);
           FM.requestToggleChannelMask(ch);
         }
       }

@@ -10,6 +10,7 @@
 #include "NJU72342.h"
 #include "fm.h"
 #include "input.h"
+#include "nd.h"
 #include "okim6258.h"
 
 Preferences preferences;
@@ -64,6 +65,8 @@ static const char* configSlug(tConfig item) {
       return "control";
     case CFG_VWROTATE:
       return "vwrotate";
+    case CFG_MODE:
+      return "mode";
     default:
       return "";
   }
@@ -78,10 +81,14 @@ static tConfig configFromSlug(const String& slug) {
   }
   return CFG_UNKNOWN;
 }
-void _saveCFGonCore0(void* param) {
+static void saveConfigItems() {
   for (int i = 0; i < ndConfig.items.size(); i++) {
     preferences.putUChar(ndConfig.items[i].slug.c_str(), ndConfig.items[i].index);
   }
+}
+
+void _saveCFGonCore0(void* param) {
+  saveConfigItems();
   vTaskDelete(NULL);
 }
 
@@ -206,6 +213,9 @@ void NDConfig::init() {
                    {"Left", "Right"},
                    {VW_ROTATE_OFF, VW_ROTATE_ON}});
 
+  items.push_back(
+      {"mode", 0, "動作モード", "Mode", {"プレーヤー", "シリアル"}, {"Player", "Serial"}, {MODE_PLAYER, MODE_SERIAL}});
+
   preferences.begin("NanoDrive");
 }
 
@@ -226,6 +236,11 @@ void NDConfig::saveCfg() {
   xTaskCreateUniversal(_saveCFGonCore0, "saveCFG", 10000, NULL, 1, NULL, PRO_CPU_NUM);
   applyCfg();
   return;
+}
+
+void NDConfig::saveCfgNow() {
+  saveConfigItems();
+  applyCfg();
 }
 
 // 最後に開いたノード保存
@@ -273,6 +288,9 @@ void NDConfig::loadCfg() {
       ndConfig.items[i].index = idx;
     }
   }
+
+  // 現在の動作モード
+  ND::currentMode = static_cast<tMode>(get(CFG_MODE));
 }
 
 // 最後に開いたノード取得

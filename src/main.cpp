@@ -85,7 +85,6 @@ void setup() {
   Serial.printf("PSRAM - Total %'d, Free %'d\n", ESP.getPsramSize(), ESP.getFreePsram());
 
   delay(100);
-
   Wire.begin(I2C_SDA, I2C_SCL, I2C_CLOCK);
 
   // ディスプレイ初期化
@@ -96,7 +95,7 @@ void setup() {
   lcd.setFont(&fonts::Font2);
   lcd.println("NANO DRIVE 8");
   lcd.println("2024 -2026 Fujix@e2j.net");
-  lcd.printf("Firmware: 1.0b6\n\n");
+  lcd.printf("Firmware ver %s\n\n", ND_FIRMWARE_VERSION);
 
   delay(100);  // 安定用必須
 

@@ -4,11 +4,14 @@
 #ifndef ND_H
 #define ND_H
 
+#define ND_FIRMWARE_VERSION "1.0b7"
+
 #include <Arduino.h>
 
 #include <vector>
 
 #include "SI5351_types.hpp"
+#include "config.h"
 
 // チップ定義
 typedef enum {
@@ -43,7 +46,6 @@ enum class FileFormat {
   VGM,
   VGZ,
   MDX,
-
   XGM1,
   XGM2,
   S98,
@@ -53,6 +55,7 @@ const std::vector<String> FORMAT_LABEL = {"--", "VGM", "VGZ", "MDX", "XGM1", "XG
 
 class ND {
  public:
+  static tMode currentMode;      // 現在の動作モード
   static FileFormat fileFormat;  //
   static bool canPlay;           // ファイル処理可能
   static bool isPaused;          // 再生ホールド中

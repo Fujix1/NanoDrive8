@@ -34,18 +34,18 @@ bool LedClass::init() {
   }
 
   if (!Wire.begin(I2C_SDA, I2C_SCL, I2C_CLOCK)) {
-    Serial.println("AW9523: Wire.begin() failed.");
+    // Serial.println("AW9523: Wire.begin() failed.");
     lcd.printf("[WARN] AW9523 Wire init failed.\n");
     return false;
   }
 
   if (!_aw9523->begin(ADDR, &Wire)) {
-    Serial.println("AW9523: not found.");
+    // Serial.println("AW9523: not found.");
     lcd.printf("[WARN] AW9523 not found.\n");
     return false;
   }
 
-  Serial.println("AW9523: configure all pins for constant-current LED mode.");
+  // Serial.println("AW9523: configure all pins for constant-current LED mode.");
   for (u8_t pin = 0; pin < PIN_COUNT; pin++) {
     _aw9523->pinMode(pin, AW9523_LED_MODE);
     _aw9523->analogWrite(pin, 0);
@@ -83,7 +83,7 @@ void LedClass::startupTest() {
   }
   setAll(LED_TEST_TAIL_BRIGHTNESS);
 
-  Serial.println("AW9523: LED test complete.");
+  // Serial.println("AW9523: LED test complete.");
 }
 
 bool LedClass::set(u8_t led, u8_t brightness) {

@@ -1,6 +1,7 @@
 #include "nd.h"
 
 // ND ステートの初期化
+tMode ND::currentMode = MODE_PLAYER;
 FileFormat ND::fileFormat = FileFormat::Unknown;
 bool ND::canPlay = false;
 bool ND::isPaused = false;

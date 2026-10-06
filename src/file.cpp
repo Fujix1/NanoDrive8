@@ -1022,7 +1022,7 @@ bool NDFile::openFile(String path) {
 
   // Serial.printf("Folder attenuation : %d dB\n", _att);
   if (xSemaphoreTake(spFileOpen, 0) != pdTRUE) {
-    Serial.printf("Semapho is already taken.\n");
+    // Serial.printf("Semapho is already taken.\n");
     return false;
   }
 
@@ -1128,12 +1128,12 @@ bool NDFile::getHeaderCache(String filePath) {
     // キャッシュモードのとき
     File file = SD.open(filePath);
     if (!file) {
-      Serial.println("getHeaderCache: failed to open file");
+      // Serial.println("getHeaderCache: failed to open file");
       return false;
     }
 
     if (file.size() < 256) {
-      Serial.println("getHeaderCache: file too small");
+      // Serial.println("getHeaderCache: file too small");
       file.close();
       return false;
     }
@@ -1240,7 +1240,7 @@ u32_t NDFile::get_ui32_at(u32_t p) {
 // キャッシュ版
 u8_t NDFile::get_ui8_at_header(u32_t p) {
   if (p >= sizeof(header)) {
-    Serial.printf("[WARN] get_ui8_at_header: out of range! p=%u (size=%u)\n", p, sizeof(header));
+    // Serial.printf("[WARN] get_ui8_at_header: out of range! p=%u (size=%u)\n", p, sizeof(header));
     return 0;
   }
   return header[p];
@@ -1248,7 +1248,8 @@ u8_t NDFile::get_ui8_at_header(u32_t p) {
 
 u16_t NDFile::get_ui16_at_header(u32_t p) {
   if (p + 1 >= sizeof(header)) {
-    Serial.printf("[WARN] get_ui16_at_header: out of range! p=%u (size=%u)\n", p, sizeof(header));
+    // Serial.printf("[WARN] get_ui16_at_header: out of range! p=%u (size=%u)\n", p,
+    // sizeof(header));
     return 0;
   }
   return (u32_t(header[p])) + (u32_t(header[p + 1]) << 8);
@@ -1256,7 +1257,8 @@ u16_t NDFile::get_ui16_at_header(u32_t p) {
 
 u32_t NDFile::get_ui24_at_header(u32_t p) {
   if (p + 2 >= sizeof(header)) {
-    Serial.printf("[WARN] get_ui24_at_header: out of range! p=%u (size=%u)\n", p, sizeof(header));
+    // Serial.printf("[WARN] get_ui24_at_header: out of range! p=%u (size=%u)\n", p,
+    // sizeof(header));
     return 0;
   }
   return (u32_t(header[p])) + (u32_t(header[p + 1]) << 8) + (u32_t(header[p + 2]) << 16);

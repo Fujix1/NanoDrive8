@@ -643,7 +643,7 @@ void FMChip::applyPendingChannelMask() {
 
 // chマスクはパンの両方ミュートで対応
 void FMChip::toggleChannelMask(u8_t ch) {
-  Serial.printf("ch=%d\n", ch);
+  // Serial.printf("ch=%d\n", ch);
   ym2151_chmask ^= (u8_t)(1u << ch);
   const bool masked = ((ym2151_chmask >> ch) & 0x1) != 0;
   if (!masked) {
@@ -654,12 +654,12 @@ void FMChip::toggleChannelMask(u8_t ch) {
     pulseChannelMaskLed(ch);
   }
   setKeyboardYM2151ChannelMask(ym2151_chmask);
-  Serial.printf("chmask=%x\n", ym2151_chmask);
+  // Serial.printf("chmask=%x\n", ym2151_chmask);
   const byte addr = 0x20 + ch;
   const byte data = masked ? (ym2151_reg[addr] & 0x3F) : ym2151_reg[addr];
 
   setRegisterOPM(addr, data, 0, true);
-  Serial.printf("addr: %x, dat: %x\n", addr, data);
+  // Serial.printf("addr: %x, dat: %x\n", addr, data);
 }
 
 void FMChip::refreshChannelMaskLeds() {

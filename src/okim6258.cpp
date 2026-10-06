@@ -262,9 +262,9 @@ static inline __attribute__((always_inline)) int32_t getPcm8Sample(u8_t pcmDataK
   return (int16_t)(ndFile.data[pcmBase] | (ndFile.data[pcmBase + 1] << 8));
 }
 
-static inline __attribute__((always_inline)) int32_t interpolatePcm8Sample(
-    u8_t pcmDataKind, bool pcm16Is15Khz, u32_t startPos, u32_t pos, u32_t frac,
-    u32_t sizeSamples, int32_t sample) {
+static inline __attribute__((always_inline)) int32_t
+interpolatePcm8Sample(u8_t pcmDataKind, bool pcm16Is15Khz, u32_t startPos, u32_t pos, u32_t frac,
+                      u32_t sizeSamples, int32_t sample) {
   if (frac == 0) {
     return sample;
   }
@@ -1097,11 +1097,11 @@ void OKIM6258::endVgmPcmReencode(bool preserveInputCache) {
     inputOverflows = state.vgmInputOverflows;
     lowPassEnabled = state.lowPassEnabled;
     portEXIT_CRITICAL(&okim6258Mux);
-    Serial.printf(
+    /*Serial.printf(
         "VGM ADPCM filter: %s, LPF=%s, bytes=%u, max=%u us, "
         "underflows=%u, inputOverflows=%u\n",
         filterForm, lowPassEnabled ? "on" : "off", encodedBytes, encodeMaxUs, outputUnderflows,
-        inputOverflows);
+        inputOverflows);*/
   }
 
   portENTER_CRITICAL(&okim6258Mux);

@@ -33,6 +33,7 @@ typedef enum {
 } tFadeout;
 typedef enum { AMP_0 = 0, AMP_3 = 3, AMP_6 = 6, AMP_9 = 9 } tAmp;
 typedef enum { TRANDOM_NO, TRANDOM_FOLDER, TRANDOM_ALL } tRandom;
+typedef enum { MODE_PLAYER, MODE_SERIAL } tMode;
 typedef enum { TPAN_NORMAL, TPAN_INVERT } tCfgPan;
 typedef enum { LAST_VIEW_PLAYER = 0, LAST_VIEW_VISUAL = 1 } tLastView;  // 最後開いていたウィンドウ
 typedef enum {
@@ -78,6 +79,7 @@ typedef enum {
   CFG_PAUSE,       // 再生時一時停止
   CFG_CONTROL,     // 操作セット
   CFG_VWROTATE,    // ビジュアル表示回転
+  CFG_MODE,        // 動作モード
   CFG_UNKNOWN,
 } tConfig;
 
@@ -98,6 +100,7 @@ class NDConfig {
   void init();
   void applyCfg();
   void saveCfg();
+  void saveCfgNow();
   void saveNodePath(const String& nodePath);
   void saveLastView(tLastView view);
   void flushLastView();

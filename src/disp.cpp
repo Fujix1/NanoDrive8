@@ -6,10 +6,6 @@
 #include "pics.h"
 #include "png_renderer.h"
 
-#ifndef ND_DEBUG_VISUAL_UPDATE
-#define ND_DEBUG_VISUAL_UPDATE 0
-#endif
-
 class ScopedEncoderDisable {
  public:
   ScopedEncoderDisable() : _restore(input.isEncoderEnabled()) {
@@ -134,11 +130,6 @@ static u16_t labelSprite[kLabelSpriteCount]
 static u16_t visualRowBuffer[LCD_W];                               // 低頻度画像の180度反転用
 static constexpr int kLevelDrawX = 67;                             // レベルメータX
 static constexpr int kLevelDrawBottomY = 262;                      // レベルメータY下端
-#if ND_DEBUG_VISUAL_UPDATE
-static u32_t visualUpdateCount = 0;
-static u32_t visualUpdateSkipCount = 0;
-static uint64_t visualUpdateTimeUs = 0;
-#endif
 static int8_t lastTrackPan[16] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 static int8_t lastTrackLevel[16] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 static int8_t lastTrackPeak[16] = {-1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
@@ -1794,9 +1785,19 @@ void CFGWindow::show() {
 }
 
 void CFGWindow::close() {
+  const bool modeChanged = static_cast<tMode>(ndConfig.get(CFG_MODE)) != ND::currentMode;
   if (_isChanged) {
-    ndConfig.saveCfg();
+    if (modeChanged) {
+      // 動作モード変更時はこの直後に再起動するため、非同期保存を待たずに同期保存する。
+      ndConfig.saveCfgNow();
+    } else {
+      ndConfig.saveCfg();
+    }
     _isChanged = false;
+  }
+  if (modeChanged) {
+    ESP.restart();
+    return;
   }
 }
 
@@ -1978,10 +1979,6 @@ void VisualWindow::draw() {
 
 // 更新処理
 void VisualWindow::update() {
-#if ND_DEBUG_VISUAL_UPDATE
-  u32_t t0 = micros();
-#endif
-
   // キー情報更新
   if (disp.currentView == ViewMode::Visual) {
     // キーボードのスプライト配置
@@ -1993,9 +1990,6 @@ void VisualWindow::update() {
     u8_t noteSnapshot[16];
     u8_t ym2151ChannelMaskSnapshot;
     if (xSemaphoreTake(KeyBoard.keyinfoMutex, 0) != pdTRUE) {
-#if ND_DEBUG_VISUAL_UPDATE
-      visualUpdateSkipCount++;
-#endif
       return;
     }
     memcpy(keySnapshot, KeyBoard.keyInfo, sizeof(keySnapshot));
@@ -2022,9 +2016,6 @@ void VisualWindow::update() {
     }
 
     if (!tryLockDrawing()) {
-#if ND_DEBUG_VISUAL_UPDATE
-      visualUpdateSkipCount++;
-#endif
       return;
     }
 
@@ -2060,18 +2051,6 @@ void VisualWindow::update() {
     lblSongTitle.update();
     unlockDrawing();
   }
-
-#if ND_DEBUG_VISUAL_UPDATE
-  visualUpdateTimeUs += (u32_t)(micros() - t0);
-  visualUpdateCount++;
-  if (visualUpdateCount >= 500) {
-    Serial.printf("VisualWindow::update avg=%lu us skip=%lu\n",
-                  (u32_t)(visualUpdateTimeUs / visualUpdateCount), visualUpdateSkipCount);
-    visualUpdateCount = 0;
-    visualUpdateSkipCount = 0;
-    visualUpdateTimeUs = 0;
-  }
-#endif
 }
 
 void VisualWindow::updateLabels() {

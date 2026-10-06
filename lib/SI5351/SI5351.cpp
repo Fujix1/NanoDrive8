@@ -260,7 +260,7 @@ void SI5351_cls::setFreq(si5351Freq_t newFreq, u8_t outputCh) {
       break;
   }
 
-  Serial.printf("SetFreq: ch %d, %d Hz\n", outputCh, newFreq);
+  // Serial.printf("SetFreq: ch %d, %d Hz\n", outputCh, newFreq);
   si5351PLL_t targetPLL;
 
   if (outputCh == 0 || outputCh == 1) {
