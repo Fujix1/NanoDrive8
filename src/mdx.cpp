@@ -1910,8 +1910,8 @@ void MDXClass::processTick() {
           case 0xed: {  // ADPCM/ノイズ周波数設定
             u8_t freq = ndFile.get_ui8_at(tracks[i].pc++);
             if (i < 8) {
-              u8_t noise = (FM.ym2151_reg[0x0f] & 0x80) | (freq & 0x1f);
-              FM.setRegisterOPM(0x0f, noise, 0);
+              // bit7 のノイズ有効指定も含め、引数をそのまま OPM に渡す (portable_mdx L0014dc)。
+              FM.setRegisterOPM(0x0f, freq, 0);
             } else {
               if (!MDX.pcm8) {
                 // ADPCM 周波数
