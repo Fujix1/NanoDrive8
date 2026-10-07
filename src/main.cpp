@@ -54,6 +54,9 @@
  */
 
 #include "config.h"
+
+#include <driver/gpio.h>
+#include <esp_intr_alloc.h>
 //--
 #include "NJU72342.h"
 #include "SI5351.hpp"
@@ -65,6 +68,7 @@
 #include "leds.h"
 #include "mdx.h"
 #include "okim6258.h"
+#include "serialman.h"
 #include "vgm.h"
 
 void setup() {
@@ -98,6 +102,11 @@ void setup() {
   lcd.printf("Firmware ver %s\n\n", ND_FIRMWARE_VERSION);
 
   delay(100);  // 安定用必須
+
+  // GPIO ISR サービスは全ピン共通。入力の attachInterrupt() より先に、
+  // C ハンドラと FreeRTOS ISR API を使用できるレベル 3 で確保する。
+  // 現在の OKI ISR は PSRAM 上の曲データも読むため、IRAM フラグは付けない。
+  ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3));
 
   // ﾆｭｳﾘｮｸ
   if (input.init()) {
@@ -133,6 +142,20 @@ void setup() {
   // VGM用GPIO初期化
   // Lovyanの初期化で上書きされるので、initDisp();の後に呼び出す
   FM.begin();
+
+  // シリアルモードでは SD や再生用タスクを初期化せず、設定画面と入力を有効にする。
+  if (ND::currentMode == MODE_SERIAL) {
+    if (Leds.init()) {
+      Leds.startupTest();
+      Leds.setAll(0);
+      FM.refreshChannelMaskLeds();
+    }
+    cfgWindow.init();
+    serialMan.init();
+    input.setEnabled(true);
+    return;
+  }
+
   FM.reset();
 
   // ビジュアル初期化
@@ -238,6 +261,13 @@ void setup() {
 }
 
 void loop() {
+  if (ND::currentMode == MODE_SERIAL) {
+    while (1) {
+      input.inputHandler();
+      vTaskDelay(1);
+    }
+  }
+
   while (1) {
     FM.applyPendingChannelMask();
 

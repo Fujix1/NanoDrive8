@@ -218,7 +218,9 @@ static void dispatchEncoderStep(int8_t direction) {
   switch (disp.currentView) {
     case ViewMode::Player:
     case ViewMode::Visual:
-      ndFile.filePlay(direction > 0 ? 1 : -1);
+      if (ND::currentMode == MODE_PLAYER) {
+        ndFile.filePlay(direction > 0 ? 1 : -1);
+      }
       break;
     case ViewMode::Config:
     case ViewMode::Browser:
@@ -663,6 +665,12 @@ void Input::inputHandler() {
   // 入力処理
   switch (disp.currentView) {
     case ViewMode::Player: {  // プレイヤーのとき
+      if (ND::currentMode == MODE_SERIAL) {
+        if (inputBuffer == btn10 || inputBuffer == btn20) {
+          sendEventToQueue(event::Option);
+        }
+        break;
+      }
       switch (inputBuffer) {
         case btn00: {
           if (isControlSet2) {

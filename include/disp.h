@@ -75,6 +75,7 @@ typedef struct {
 
 // void redrawOnCore0();
 bool openPNG(String path, bool AA, bool sprite);
+void serialModeDraw();  // シリアルモード画面描画
 
 // 現在の画面表示モード
 enum class ViewMode { Player, Config, Serial, Visual, Browser };
@@ -84,7 +85,6 @@ class Disp {
  private:
  public:
   bool init();  // 初期化
-  // void serialModeDraw();            // シリアルモード画面描画
   void startTimer();  // 描画タイマー開始
   void stopTimer();   // 描画タイマー停止
 

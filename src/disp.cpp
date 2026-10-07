@@ -1149,7 +1149,7 @@ void PlayerWindow::drawBG() {  // 背景描画
   frameBuffer.fillRect(0, 0, LCD_W, 19, C_HEADER);
   // frameBuffer.fillRect(0, 75, LCD_W, 125, C_DARK);
   frameBuffer.fillRoundRect(1, 279, LCD_W - 2, 40, 2, C_DARK);
-  if (ND::fileFormat == FileFormat::MDX) {
+  if (ND::currentMode == MODE_PLAYER && ND::fileFormat == FileFormat::MDX) {
     frameBuffer.pushImage(7, 210, ICONS_WIDTH, ICONS_HEIGHT, icons_mdx);
   } else {
     frameBuffer.pushImage(7, 210, ICONS_WIDTH, ICONS_HEIGHT, icons_vgm);
@@ -1159,6 +1159,11 @@ void PlayerWindow::drawBG() {  // 背景描画
 }
 
 void PlayerWindow::redraw() {  // プレーヤー描画
+  if (ND::currentMode == MODE_SERIAL) {
+    serialModeDraw();
+    return;
+  }
+
   xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
 
   disp.stopTimerDrawing = true;
@@ -1262,6 +1267,57 @@ void PlayerWindow::redraw() {  // プレーヤー描画
   xSemaphoreGive(spFrameBuffer);
 }
 
+// ND6 と同じ Player 画面の構成でシリアルモードを表示する。
+static void setSerialModeLabels() {
+  if (ndConfig.get(CFG_LANG) == LANG_JA) {
+    lblTitle.prepareCaption("シリアルモード");
+    lblGame.prepareCaption("ベータ版");
+  } else {
+    lblTitle.prepareCaption("Serial Mode");
+    lblGame.prepareCaption("Beta Version");
+  }
+  lblAuthor.prepareCaption("--");
+  lblSystem.prepareCaption("YM2151 / M6258");
+  drawPreparedPlayerLabels();
+}
+
+void serialModeDraw() {
+  xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
+  disp.stopTimerDrawing = true;
+  playerWindow.drawBG();
+  disp.render.setUseRenderTask(false);
+  disp.render.setDrawer(frameBuffer);
+  frameBuffer.pushImage(LCD_W - 2 - USB_ICON_WIDTH, 2, USB_ICON_WIDTH, USB_ICON_HEIGHT,
+                        usb_icon);
+
+  disp.render.setAlignment(Align::TopLeft);
+  disp.render.loadFont(nimbusBold, sizeof(nimbusBold));
+  disp.render.setFontSize(13);
+  disp.render.setFontColor(C_YELLOW, C_DARK);
+  disp.render.setCursor(27, 284);
+  disp.render.printf("%s", ND::formatChipName(ND::freq[0], CHIP_YM2151).c_str());
+  disp.render.setCursor(27, 303);
+  disp.render.printf("%s", ND::formatChipName(ND::freq[1], CHIP_OKIM6258).c_str());
+  disp.render.setFontColor(C_LIGHTGRAY, C_FOOTER_INACTIVE);
+  disp.render.setCursor(11, 284);
+  disp.render.printf("1");
+  disp.render.setCursor(11, 303);
+  disp.render.printf("2");
+  disp.render.unloadFont();
+
+  disp.render.loadFont(fontMain, sizeof(fontMain));
+  disp.render.setFontSize(16);
+  disp.render.setFontColor(C_GRAY, C_BASEBG);
+  disp.render.setCursor(28, 255);
+  disp.render.printf("--");
+  disp.render.unloadFont();
+  setSerialModeLabels();
+
+  frameBuffer.pushSprite(0, 0);
+  disp.stopTimerDrawing = false;
+  xSemaphoreGive(spFrameBuffer);
+}
+
 void PlayerWindow::updateDisp(tDispData data) {
   dispData.authorEn = data.authorEn;
   dispData.authorJp = data.authorJp;
@@ -1320,6 +1376,13 @@ void PlayerWindow::updateHeader(int64_t sec, bool visible, uint32_t ticksToWait)
 
 // イベント処理
 void PlayerWindow::eventHandler(event event) {
+  if (ND::currentMode == MODE_SERIAL) {
+    if (event == event::Option || event == event::Menu) {
+      cfgWindow.show();
+    }
+    return;
+  }
+
   switch (event) {
     case event::Up: {
       break;
@@ -1353,7 +1416,9 @@ void PlayerWindow::show() {
   ScopedEncoderDisable encoderGuard;
   disp.currentView = ViewMode::Player;
   disp.lastView = ViewMode::Player;
-  ndConfig.saveLastView(LAST_VIEW_PLAYER);
+  if (ND::currentMode == MODE_PLAYER) {
+    ndConfig.saveLastView(LAST_VIEW_PLAYER);
+  }
   redraw();
   disp.stopTimerDrawing = false;  // タイマー描画更新再開
 }
@@ -1438,6 +1503,10 @@ void CFGWindow::eventHandler(event event) {
       case event::Close: {
         // Serial.printf("CFG Window::Close event.\n");
         this->close();
+        if (ND::currentMode == MODE_SERIAL) {
+          playerWindow.show();
+          break;
+        }
         if (ndConfig.get(CFG_CONTROL) == CTRL_2) {
           visualWindow.show();
           break;
@@ -1513,7 +1582,11 @@ void CFGWindow::eventHandler(event event) {
       }
       case event::Menu: {
         this->close();
-        browserWindow.show();
+        if (ND::currentMode == MODE_SERIAL) {
+          playerWindow.show();
+        } else {
+          browserWindow.show();
+        }
         break;
       }
       case event::EncClick: {

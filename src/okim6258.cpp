@@ -11,6 +11,8 @@
 
 #include "okim6258.h"
 
+#include <driver/gpio.h>
+
 #include "config.h"
 #include "file.h"
 #include "fm.h"
@@ -864,8 +866,11 @@ void OKIM6258::init() {
   // 割り込み初期化
   pinMode(MCK, INPUT);
 
-  // 立ち上がりエッジで割り込み登録
-  attachInterruptArg(MCK, okim6258_mck_isr, NULL, RISING | ESP_INTR_FLAG_NMI | ESP_INTR_FLAG_IRAM);
+  // setup() でレベル 3 に設定した GPIO ISR サービスへ直接登録する。
+  // エッジ種別と CPU 割り込み優先度は別の設定。NMI は使用しない。
+  const gpio_num_t mckPin = static_cast<gpio_num_t>(MCK);
+  ESP_ERROR_CHECK(gpio_set_intr_type(mckPin, GPIO_INTR_POSEDGE));
+  ESP_ERROR_CHECK(gpio_isr_handler_add(mckPin, okim6258_mck_isr, NULL));
 
   // Serial.println("OKIM6258 MCK interrupt registered");
   // Serial.printf("GPIO Pin: %d\n", MCK);

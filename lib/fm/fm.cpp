@@ -10,7 +10,7 @@
 void setKeyboardYM2151ChannelMask(u8_t mask);
 
 dedic_gpio_bundle_handle_t dataBus = NULL;  // GPIOバンドル用ハンドラ
-static SemaphoreHandle_t spGPIO = NULL;     // GPIOアクセス用セマフォ
+static SemaphoreHandle_t spYM2151 = NULL;   // YM2151 のアドレス・データ対を直列化
 // クリティカルセクション
 portMUX_TYPE gpioMux = portMUX_INITIALIZER_UNLOCKED;
 static portMUX_TYPE ym2151ChmaskMux = portMUX_INITIALIZER_UNLOCKED;
@@ -121,9 +121,9 @@ static void pulseChannelMaskLed(u8_t ch) {
 // FMChip::FMChip() : _io(PCA95XX_PCA9537) {}
 
 void FMChip::begin() {
-  // GPIO 用セマフォ作成
-  spGPIO = xSemaphoreCreateBinary();
-  xSemaphoreGive(spGPIO);
+  // 待ち時間中は割り込みを許可し、別タスクの YM2151 書き込みだけを排他する。
+  spYM2151 = xSemaphoreCreateMutex();
+  configASSERT(spYM2151 != NULL);
 
   // データバス用 GPIO バンドル
   const int bundleA_gpios[] = {D0, D1, D2, D3, D4, D5, D6, D7};
@@ -430,6 +430,8 @@ void FMChip::setRegister(byte addr, byte data, int chipno = 0) {
 // YM2151用レジスタ設定
 void FMChip::setRegisterOPM(byte addr, byte data, u8_t chipno, boolean temp) {
   (void)chipno;
+  // タスク専用。OKI ISR はこの mutex を取得しない。
+  xSemaphoreTake(spYM2151, portMAX_DELAY);
 
   // temp=true のときはキャッシュ済みの実レジスタ値を一時送信する。
   byte writeData = data;
@@ -452,15 +454,23 @@ void FMChip::setRegisterOPM(byte addr, byte data, u8_t chipno, boolean temp) {
   CS0_LOW;
   WR_LOW;
   WR_HIGH;
-  A0_HIGH;
+  CS0_HIGH;
+  portEXIT_CRITICAL(&gpioMux);
+
+  // アドレスは YM2151 内に保持される。CS を解除して OKI にバスを譲る。
   ets_delay_us(4);  // 11サイクル, 3us @ 3.57MHz, 2.75us @ 4MHz
-  // data
+
+  // data: OKI が A0・データバスを変更していても、ここで再設定する。
+  portENTER_CRITICAL(&gpioMux);
+  A0_HIGH;
   dedic_gpio_bundle_write(dataBus, 0xff, writeData);
+  CS0_LOW;
   WR_LOW;
   WR_HIGH;
   CS0_HIGH;
   portEXIT_CRITICAL(&gpioMux);
   ets_delay_us(21);  // 68サイクル, 19us @ 3.57MHz, 17us @ 4MHz
+  xSemaphoreGive(spYM2151);
 }
 
 void FMChip::setRegisterOPL3(byte port, byte addr, byte data, int chipno) {
