@@ -83,6 +83,9 @@ void setup() {
   pinMode(A0, OUTPUT);
   pinMode(A1, OUTPUT);
 
+  // HWCDC の起動後の resize は RX キューを削除するため、割り込み開始前に確保する。
+  const size_t usbRxSize = Serial.setRxBufferSize(SerialMan::USB_RX_SIZE);
+  configASSERT(usbRxSize == SerialMan::USB_RX_SIZE);
   Serial.begin(115200);
   Serial.printf("Heap - %'d Bytes free\n", ESP.getFreeHeap());
   Serial.printf("Flash - %'d Bytes at %'d\n", ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
@@ -152,6 +155,7 @@ void setup() {
     }
     cfgWindow.init();
     serialMan.init();
+    serialMan.startSerialTask();
     input.setEnabled(true);
     return;
   }

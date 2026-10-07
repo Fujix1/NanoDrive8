@@ -42,6 +42,9 @@ class VGM {
 
   void resetKeyInfo();
 
+  // Share the existing clock normalization with serial mode.
+  si5351Freq_t normalizeFreq(u32_t freq, t_chip chip);
+
   u64_t getCurrentTimeSec();
   u64_t getCurrentTimeSubSec();
   u64_t startTick;
@@ -133,8 +136,6 @@ class VGM {
 
     return fout;
   }
-
-  si5351Freq_t normalizeFreq(u32_t freq, t_chip chip);
 
   u32_t _gd3p;
   void _parseGD3(u32_t pos);

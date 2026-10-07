@@ -75,6 +75,7 @@ typedef struct {
 
 // void redrawOnCore0();
 bool openPNG(String path, bool AA, bool sprite);
+void serialModeUpdateFooter();
 void serialModeDraw();  // シリアルモード画面描画
 
 // 現在の画面表示モード

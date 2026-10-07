@@ -1281,15 +1281,11 @@ static void setSerialModeLabels() {
   drawPreparedPlayerLabels();
 }
 
-void serialModeDraw() {
-  xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
-  disp.stopTimerDrawing = true;
-  playerWindow.drawBG();
-  disp.render.setUseRenderTask(false);
-  disp.render.setDrawer(frameBuffer);
-  frameBuffer.pushImage(LCD_W - 2 - USB_ICON_WIDTH, 2, USB_ICON_WIDTH, USB_ICON_HEIGHT,
-                        usb_icon);
-
+// Caller holds spFrameBuffer and selects frameBuffer as the font drawer.
+static void drawSerialModeFooter() {
+  frameBuffer.fillRoundRect(1, 279, LCD_W - 2, 40, 2, C_DARK);
+  frameBuffer.fillRoundRect(6, 283, 17, 14, 2, C_FOOTER_ACTIVE);
+  frameBuffer.fillRoundRect(6, 301, 17, 14, 2, C_FOOTER_ACTIVE);
   disp.render.setAlignment(Align::TopLeft);
   disp.render.loadFont(nimbusBold, sizeof(nimbusBold));
   disp.render.setFontSize(13);
@@ -1304,6 +1300,31 @@ void serialModeDraw() {
   disp.render.setCursor(11, 303);
   disp.render.printf("2");
   disp.render.unloadFont();
+}
+
+void serialModeUpdateFooter() {
+  xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
+  if (ND::currentMode == MODE_SERIAL && disp.currentView == ViewMode::Player) {
+    disp.render.setUseRenderTask(false);
+    disp.render.setDrawer(frameBuffer);
+    drawSerialModeFooter();
+    lcd.setClipRect(0, 279, LCD_W, 40);
+    frameBuffer.pushSprite(0, 0);
+    lcd.clearClipRect();
+  }
+  xSemaphoreGive(spFrameBuffer);
+}
+
+void serialModeDraw() {
+  xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
+  disp.stopTimerDrawing = true;
+  playerWindow.drawBG();
+  disp.render.setUseRenderTask(false);
+  disp.render.setDrawer(frameBuffer);
+  frameBuffer.pushImage(LCD_W - 2 - USB_ICON_WIDTH, 2, USB_ICON_WIDTH, USB_ICON_HEIGHT,
+                        usb_icon);
+
+  drawSerialModeFooter();
 
   disp.render.loadFont(fontMain, sizeof(fontMain));
   disp.render.setFontSize(16);
