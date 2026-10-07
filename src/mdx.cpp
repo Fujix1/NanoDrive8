@@ -1078,11 +1078,24 @@ void MDXClass::_setVolume(u8_t trackNo) {
 
   static const u8_t carrierSlots[8] = {0x08, 0x08, 0x08, 0x08, 0x0c, 0x0e, 0x0e, 0x0f};
 
+  const u8_t* voiceTL = tracks[trackNo].tl;
+  u8_t pendingTL[4];
+  if (tracks[trackNo].flags & 0x02) {
+    const u8_t internalIdx = voiceTable[tracks[trackNo].voiceNo];
+    if (internalIdx != 0xff) {
+      const u32_t tlAddr = voiceDataOffset + internalIdx * 27 + 7;
+      for (int op = 0; op < 4; ++op) {
+        pendingTL[op] = ndFile.get_ui8_at(tlAddr + op);
+      }
+      voiceTL = pendingTL;
+    }
+  }
+
   u8_t con = tracks[trackNo].con_fl & 0x07;  // Connect(AL) アルゴリズム
 
   for (int op = 0; op < 4; op++) {
-    if (carrierSlots[con] & (1 << op)) {           // キャリアなら
-      finalTL = tracks[trackNo].tl[op] + tlValue;  // TL調整
+    if (carrierSlots[con] & (1 << op)) {  // キャリアなら
+      finalTL = voiceTL[op] + tlValue;    // TL調整
       if (finalTL < 0) {
         finalTL = 0;
       } else if (finalTL > 127) {
@@ -1090,7 +1103,7 @@ void MDXClass::_setVolume(u8_t trackNo) {
       }
 
     } else {
-      finalTL = tracks[trackNo].tl[op];
+      finalTL = voiceTL[op];
     }
     if (finalTL > 127 || finalTL < 0) {
       finalTL = 127;
