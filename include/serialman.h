@@ -35,7 +35,7 @@ class SerialMan {
   static void serialTask(void* arg);
   void receive();
   void processCommands();
-  void resetReceiveLocked();
+  void resetReceiveLocked(uint32_t reason);
   SemaphoreHandle_t receiveMutex = nullptr;
   TaskHandle_t receiveTask = nullptr;
   uint8_t* receiveBuffer = nullptr;
@@ -44,6 +44,7 @@ class SerialMan {
   size_t usbDiscardRemaining = 0;
   ReceiveStatus status;
   bool protocolResetPending = false;
+  uint32_t transportLossPending = 0;
   ndsif::Protocol protocol;
 };
 

@@ -1,10 +1,11 @@
 #include "ndsif.h"
 
 namespace ndsif {
-void Protocol::configure(Reset reset, WriteYM write, const char* firmware, SetClock clock) {
+void Protocol::configure(Reset reset, WriteYM write, const char* firmware, SetClock clock, Audio audio) {
   reset_ = reset;
   write_ = write;
   clock_ = clock;
+  audio_ = audio;
   firmware_ = firmware;
   clear();
 }
@@ -123,6 +124,17 @@ void Protocol::dispatch(size_t size) {
         if (hz != 0) clock_(raw_[8], hz);
       }
       return;
+    case 0x58:  // Continuous ADPCM bytes, indexed; one-way.
+    case 0x59:  // Events indexed by ADPCM byte position; one-way.
+    case 0x5a:  // Start the prepared continuous stream; one-way.
+      if (audio_) audio_(opcode, raw_ + 8, length, nullptr);
+      return;
+    case 0x5b:  // Explicit diagnostics query, never a per-chunk ACK.
+      if (length == 0 && audio_) {
+        const size_t count = audio_(opcode, nullptr, 0, raw_ + 9);
+        if (count <= MAX_PAYLOAD - 1) { responseLength += count; status = 0; }
+      }
+      break;
     default:
       break;
   }

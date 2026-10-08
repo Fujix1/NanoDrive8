@@ -1,4 +1,5 @@
 #include "serialman.h"
+#include "serialaudio.h"
 
 #include <esp_heap_caps.h>
 #include <freertos/task.h>
@@ -14,6 +15,7 @@
 namespace {
 portMUX_TYPE usbEventMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t pendingBusResets = 0;
+bool audioFooterPending = false;
 
 void usbBusReset(void*, esp_event_base_t, int32_t, void*) {
   // USB イベントタスクからの通知。画面描画や受信バッファ操作は受信タスクで行う。
@@ -22,22 +24,27 @@ void usbBusReset(void*, esp_event_base_t, int32_t, void*) {
   portEXIT_CRITICAL(&usbEventMux);
 }
 void resetChips() {
+  // Mute the main output while resetting both chips and stopping OKI.
+  nju72342.mute();
+  SerialAudio::reset();
   FM.reset();
   okim6258.reset();
   FM.setOKIM6258command(0x01, 1);
+  nju72342.unmute();
 }
 
 void writeYM2151(uint8_t address, uint8_t value) {
   FM.setRegisterOPM(address, value, 0);
 }
 
-void setChipClock(uint8_t chipID, uint32_t hz) {
-  // Only YM2151 clock control is implemented in this FM test phase.
-  if (chipID != CHIP_YM2151 || hz == 0) return;
+void setChipClockImpl(uint8_t chipID, uint32_t hz, bool drawFooter) {
+  if ((chipID != CHIP_YM2151 && chipID != CHIP_OKIM6258) || hz == 0) return;
+  if (chipID == CHIP_OKIM6258 && hz != 4000000 && hz != 8000000) return;
   const t_chip chip = static_cast<t_chip>(chipID);
   const uint8_t slot = ND::clockSlot[chip];
   if (slot >= ND::freq.size()) return;  // Absent or fixed-clock chip.
-  const si5351Freq_t freq = vgm.normalizeFreq(hz, chip);
+  const si5351Freq_t freq = chip == CHIP_OKIM6258
+      ? (hz == 4000000 ? SI5351_4000 : SI5351_8000) : vgm.normalizeFreq(hz, chip);
   if (freq == SI5351_UNDEFINED || ND::freq[slot] == freq) return;
 
   ND::freq[slot] = freq;
@@ -45,8 +52,11 @@ void setChipClock(uint8_t chipID, uint32_t hz) {
   const size_t chipSlot = ND::chipSlot[chip];
   if (chipSlot < ND::chipNames.size())
     ND::chipNames[chipSlot] = ND::formatChipName(freq, chip);
-  serialModeUpdateFooter();
+  if (drawFooter) serialModeUpdateFooter();
+  else audioFooterPending = true;
 }
+void setChipClock(uint8_t chipID, uint32_t hz) { setChipClockImpl(chipID, hz, true); }
+void setOkiClock(uint32_t hz) { setChipClockImpl(CHIP_OKIM6258, hz, false); }
 }  // namespace
 
 // シリアルモード初期化
@@ -55,7 +65,8 @@ void SerialMan::init() {
   receiveBuffer = static_cast<uint8_t*>(
       heap_caps_malloc(RECEIVE_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   configASSERT(receiveMutex != nullptr && receiveBuffer != nullptr);
-  protocol.configure(resetChips, writeYM2151, ND_FIRMWARE_VERSION, setChipClock);
+  SerialAudio::init(setOkiClock);
+  protocol.configure(resetChips, writeYM2151, ND_FIRMWARE_VERSION, setChipClock, SerialAudio::command);
   status.usbLinkActive = Serial.isPlugged();
   Serial.onEvent(ARDUINO_HW_CDC_BUS_RESET_EVENT, usbBusReset);
 
@@ -87,18 +98,22 @@ void SerialMan::serialTask(void* arg) {
   while (true) {
     // Apply masks in the same task as incoming YM2151 register writes.
     FM.applyPendingChannelMask();
+    SerialAudio::service();
     receiver.receive();
     receiver.processCommands();
+    SerialAudio::service();
+    if (audioFooterPending) { audioFooterPending = false; serialModeUpdateFooter(); }
     vTaskDelay(1);
   }
 }
 
-void SerialMan::resetReceiveLocked() {
+void SerialMan::resetReceiveLocked(uint32_t reason) {
   status.discardedBytes += status.bufferedBytes;
   status.bufferedBytes = 0;
   status.dataLost = false;
   receiveHead = receiveTail = 0;
   protocolResetPending = true;
+  transportLossPending |= reason;
 }
 
 void SerialMan::receive() {
@@ -117,9 +132,11 @@ void SerialMan::receive() {
     status.usbLinkActive = plugged;
   }
   status.busResets += resets;
-  if (linkChanged || resets != 0) {
-    // リンク変更・再列挙をまたいで古い受信データを連結しない。
-    resetReceiveLocked();
+  // isPlugged() is a SOF observation, not proof of transport data loss.
+  // A transient observation must not discard valid queued bytes or stop audio.
+  // An explicit USB bus reset still ends the old stream and resynchronizes RX.
+  if (resets != 0) {
+    resetReceiveLocked(SerialAudio::BusReset);
     const int queued = Serial.available();
     usbDiscardRemaining = queued > 0 ? static_cast<size_t>(queued) : 0;
   }
@@ -139,14 +156,14 @@ void SerialMan::receive() {
       status.discardedBytes += count;
       continue;
     }
-    if (!plugged || status.dataLost) {
+    if (status.dataLost) {
       status.discardedBytes += count;
       continue;
     }
     if (count > RECEIVE_SIZE - status.bufferedBytes) {
       // 欠落後の byte 列を正常なフレームとして渡さない。
       ++status.overflows;
-      resetReceiveLocked();
+      resetReceiveLocked(SerialAudio::ReceiveOverflow);
       status.dataLost = true;
       status.discardedBytes += count;
       continue;
@@ -185,7 +202,7 @@ SerialMan::ReceiveStatus SerialMan::receiveStatus() {
 void SerialMan::clearReceiveBuffer() {
   if (receiveMutex == nullptr) return;
   xSemaphoreTake(receiveMutex, portMAX_DELAY);
-  resetReceiveLocked();
+  resetReceiveLocked(SerialAudio::ExplicitDiscard);
   xSemaphoreGive(receiveMutex);
 }
 
@@ -193,11 +210,13 @@ void SerialMan::processCommands() {
   // Parser / response state belongs exclusively to this task.
   xSemaphoreTake(receiveMutex, portMAX_DELAY);
   const bool reset = protocolResetPending;
+  const uint32_t lossReason = transportLossPending;
   protocolResetPending = false;
-  if (status.dataLost) resetReceiveLocked();
-  protocolResetPending = false;
+  transportLossPending = 0;
+  // Overflow already discarded the ring in receive(). Resume at a delimiter.
+  status.dataLost = false;
   xSemaphoreGive(receiveMutex);
-  if (reset) protocol.clear(true);
+  if (reset) { protocol.clear(true); SerialAudio::transportLost(lossReason); }
   protocol.expire(millis());
 
   for (size_t count = 0; count < 512; ++count) {

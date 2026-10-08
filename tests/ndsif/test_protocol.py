@@ -54,6 +54,30 @@ def packet(op, payload=b"", req=0x1234, version=1, length=None):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_audio_packets_are_one_way_and_crc_gated(self):
+        for opcode in (0x58, 0x59, 0x5a):
+            self.send(packet(opcode, bytes(range(256))))
+            self.assertEqual(self.drain(), b'')
+            self.assertEqual(DLL.audioValue(1), opcode)
+            self.assertEqual(DLL.audioValue(2), 256)
+        self.assertEqual(DLL.audioValue(0), 3)
+        bad = bytearray(packet(0x58, b'abc'))
+        bad[-3] ^= 0x80
+        self.send(bad)
+        self.assertEqual(DLL.audioValue(0), 3)
+
+    def test_audio_status_explicit_query(self):
+        self.send(packet(0x5b))
+        result = self.drain()
+        raw = decode(result[1:-1])
+        self.assertEqual(raw[3], 0xdb)
+        self.assertEqual(raw[8:-2], b'\x00' + bytes(range(40)))
+        self.assertEqual(binascii.crc_hqx(raw[:-2], 0xffff), struct.unpack('<H', raw[-2:])[0])
+        self.send(packet(0x5b, b'x'))
+        raw = decode(self.drain()[1:-1])
+        self.assertEqual(raw[8], 1)
+        self.assertEqual(DLL.audioValue(0), 1)
+
     def setUp(self):
         DLL.init()
 

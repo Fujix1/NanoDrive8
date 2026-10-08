@@ -5,7 +5,7 @@
 #include <stdint.h>
 
 namespace ndsif {
-// Immediate control API. Timed playback chunks are not defined by this version.
+// Immediate controls plus experimental continuous-ADPCM callbacks (0x58..0x5b).
 class Protocol {
  public:
   static constexpr size_t MAX_PAYLOAD = 256;
@@ -14,9 +14,10 @@ class Protocol {
   static constexpr uint32_t FRAME_TIMEOUT_MS = 500;
   using Reset = void (*)();
   using WriteYM = void (*)(uint8_t, uint8_t);
+  using Audio = size_t (*)(uint8_t, const uint8_t*, size_t, uint8_t*);
   using SetClock = void (*)(uint8_t, uint32_t);
 
-  void configure(Reset reset, WriteYM write, const char* firmware, SetClock clock = nullptr);
+  void configure(Reset reset, WriteYM write, const char* firmware, SetClock clock = nullptr, Audio audio = nullptr);
   // After transport data loss, ignore bytes until a delimiter arrives.
   void clear(bool resync = false);
   void expire(uint32_t now);
@@ -33,6 +34,7 @@ class Protocol {
   Reset reset_ = nullptr;
   WriteYM write_ = nullptr;
   SetClock clock_ = nullptr;
+  Audio audio_ = nullptr;
   const char* firmware_ = "";
   uint8_t encoded_[MAX_ENCODED];
   uint8_t raw_[MAX_RAW];
