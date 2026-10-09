@@ -1066,7 +1066,7 @@ void VGM::vgmProcessMain() {
           }
           updateYm2151TrackLevel((u8_t)ch);
         } else if ((reg >= 0x28 && reg <= 0x2F) || (reg >= 0x30 && reg <= 0x37)) {
-          int ch = dat & 0x07;
+          int ch = reg & 0x07;
           if (FM.ym2151_iskeyOn[ch]) {
             KeyBoard.set(YM2151, ch, freqToNote(_getYM2151Freq(ch)));
           }
