@@ -1,5 +1,7 @@
 {
-    "files.eol": "\n",
-    "C_Cpp.formatting": "clangFormat",
-    "C_Cpp.clang_format_style": "file",
+  "files.eol": "\n",
+  "C_Cpp.formatting": "clangFormat",
+  "C_Cpp.clang_format_style": "file",
+  "mmlx.serial.connection": "COM4",
+  "mmlx.midi.input": "Digital Keyboard",
 }

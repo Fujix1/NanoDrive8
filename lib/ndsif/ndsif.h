@@ -16,8 +16,10 @@ class Protocol {
   using WriteYM = void (*)(uint8_t, uint8_t);
   using Audio = size_t (*)(uint8_t, const uint8_t*, size_t, uint8_t*);
   using SetClock = void (*)(uint8_t, uint32_t);
+  using SetVolume = void (*)(uint8_t);
 
-  void configure(Reset reset, WriteYM write, const char* firmware, SetClock clock = nullptr, Audio audio = nullptr);
+  void configure(Reset reset, WriteYM write, const char* firmware, SetClock clock = nullptr,
+                 Audio audio = nullptr, SetVolume volume = nullptr);
   // After transport data loss, ignore bytes until a delimiter arrives.
   void clear(bool resync = false);
   void expire(uint32_t now);
@@ -35,6 +37,7 @@ class Protocol {
   WriteYM write_ = nullptr;
   SetClock clock_ = nullptr;
   Audio audio_ = nullptr;
+  SetVolume volume_ = nullptr;
   const char* firmware_ = "";
   uint8_t encoded_[MAX_ENCODED];
   uint8_t raw_[MAX_RAW];

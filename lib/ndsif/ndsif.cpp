@@ -1,11 +1,13 @@
 #include "ndsif.h"
 
 namespace ndsif {
-void Protocol::configure(Reset reset, WriteYM write, const char* firmware, SetClock clock, Audio audio) {
+void Protocol::configure(Reset reset, WriteYM write, const char* firmware, SetClock clock,
+                         Audio audio, SetVolume volume) {
   reset_ = reset;
   write_ = write;
   clock_ = clock;
   audio_ = audio;
+  volume_ = volume;
   firmware_ = firmware;
   clear();
 }
@@ -105,6 +107,12 @@ void Protocol::dispatch(size_t size) {
         while (firmware_[count] != 0 && count < 63) raw_[pos++] = firmware_[count++];
         raw_[lengthPos] = static_cast<uint8_t>(count);
         responseLength = pos - 8;
+        status = 0;
+      }
+      break;
+    case 0x03:  // SET_OUTPUT_VOLUME: main output attenuation, 0..96 (96 = mute).
+      if (length == 1 && raw_[8] <= 96 && volume_ != nullptr) {
+        volume_(raw_[8]);
         status = 0;
       }
       break;
