@@ -37,6 +37,10 @@ void writeYM2151(uint8_t address, uint8_t value) {
   FM.setRegisterOPM(address, value, 0);
 }
 
+void setOutputVolume(uint8_t attenuation) {
+  nju72342.setMainAttenuation(attenuation);
+}
+
 void setChipClockImpl(uint8_t chipID, uint32_t hz, bool drawFooter) {
   if ((chipID != CHIP_YM2151 && chipID != CHIP_OKIM6258) || hz == 0) return;
   if (chipID == CHIP_OKIM6258 && hz != 4000000 && hz != 8000000) return;
@@ -66,7 +70,8 @@ void SerialMan::init() {
       heap_caps_malloc(RECEIVE_SIZE, MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT));
   configASSERT(receiveMutex != nullptr && receiveBuffer != nullptr);
   SerialAudio::init(setOkiClock);
-  protocol.configure(resetChips, writeYM2151, ND_FIRMWARE_VERSION, setChipClock, SerialAudio::command);
+  protocol.configure(resetChips, writeYM2151, ND_FIRMWARE_VERSION, setChipClock,
+                     SerialAudio::command, setOutputVolume);
   status.usbLinkActive = Serial.isPlugged();
   Serial.onEvent(ARDUINO_HW_CDC_BUS_RESET_EVENT, usbBusReset);
 

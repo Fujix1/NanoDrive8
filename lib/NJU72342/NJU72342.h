@@ -30,6 +30,7 @@ class NJU72342 {
   void setVolume_3B(u8_t newGain);     // ch3の音量設定
   void setVolume_4B(u8_t newGain);     // ch4の音量設定
   void setVolumeAll(u8_t newGain);     // メイン出力(ch3/ch4)の音量設定
+  void setMainAttenuation(u8_t att);  // メイン出力の絶対減衰量。ミュート解除後も保持
   void setAVolume(u8_t step);
   void mute();
   void unmute();

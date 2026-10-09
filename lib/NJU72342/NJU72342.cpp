@@ -184,6 +184,11 @@ void NJU72342::setInputGain(u8_t ch, tNJU7234X_GAIN newInputGain) {
 // 0:最大音量, 96: ミュート
 void NJU72342::setVolumeAll(u8_t newGain) { setVolume_3B_4B(newGain + _attenuation); }
 
+void NJU72342::setMainAttenuation(u8_t att) {
+  _attenuation = (att > 96) ? 96 : att;
+  if (!_isMuted) setVolume_3B_4B(_attenuation);
+}
+
 void NJU72342::setVolume_3B_4B(u8_t newGain) {
   if (_currentVolume[2] == newGain) {
     return;  // 変更なしのとき

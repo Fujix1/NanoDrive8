@@ -54,6 +54,31 @@ def packet(op, payload=b"", req=0x1234, version=1, length=None):
 
 
 class ProtocolTests(unittest.TestCase):
+    def test_output_volume_range_completion_and_reset(self):
+        for attenuation in range(97):
+            self.send(packet(0x03, bytes([attenuation]), req=attenuation))
+            self.assertEqual(DLL.volumeValue(1), attenuation)
+            self.assertEqual(DLL.count(2), 0)
+            self.reply(0x03, b'\x00', req=attenuation, chunk=1)
+        self.assertEqual(DLL.volumeValue(0), 97)
+        self.send(packet(0))
+        self.reply(0, b'\x00')
+        self.assertEqual(DLL.volumeValue(1), 96)
+
+    def test_output_volume_rejection_crc_and_optional_callback(self):
+        for payload in [b'', b'\x00\x01'] + [bytes([v]) for v in range(97, 256)]:
+            self.send(packet(0x03, payload))
+            self.reply(0x03, b'\x01')
+        raw = bytearray(decode(packet(0x03, b'\x10')[1:-1]))
+        raw[8] ^= 1
+        self.send(b'\0' + encode(raw) + b'\0')
+        self.assertEqual(self.drain(), b'')
+        self.assertEqual(DLL.volumeValue(0), 0)
+        DLL.noVolume()
+        self.send(packet(0x03, b'\x00'))
+        self.reply(0x03, b'\x01')
+        self.assertEqual(DLL.volumeValue(0), 0)
+
     def test_audio_packets_are_one_way_and_crc_gated(self):
         for opcode in (0x58, 0x59, 0x5a):
             self.send(packet(opcode, bytes(range(256))))
