@@ -93,8 +93,10 @@ void SerialMan::init() {
 
 void SerialMan::startSerialTask() {
   if (receiveTask != nullptr) return;
+  // Keep RX/STATUS and audio queue refill above normal UI/loop tasks (priority 1).
+  // The OKI supply remains in its hardware ISR and can preempt this task.
   const BaseType_t result = xTaskCreatePinnedToCore(
-      serialTask, "serialTask", 4096, this, 1, &receiveTask, APP_CPU_NUM);
+      serialTask, "serialTask", 4096, this, 2, &receiveTask, APP_CPU_NUM);
   configASSERT(result == pdPASS && receiveTask != nullptr);
 }
 

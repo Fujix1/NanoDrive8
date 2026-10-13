@@ -1,5 +1,7 @@
 #include "./disp.h"
 
+#include <atomic>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 
@@ -87,6 +89,12 @@ static LGFX_Sprite panMarkerRight(&lcd);
 static LGFX_Sprite panMarkerMute(&lcd);
 
 static bool kVisualRotate180 = false;
+// Protected by spFrameBuffer; invalidate on every full Visual redraw.
+static bool keyboardSnapshotValid[DEVICE_COUNT] = {};
+static NoteInfo drawnKeyboardNotes[DEVICE_COUNT][MAX_CHANNELS] = {};
+static u8_t drawnKeyboardMask = 0;
+static uint16_t drawnKeyboardColor = 0;
+
 static constexpr u8_t kLevelSpriteCount = 16;  // level 0 .. 15
 static constexpr u16_t kLevelSpriteWidth = levelsWidth;
 static constexpr u16_t kLevelSpriteHeight = 17;
@@ -482,6 +490,9 @@ static void drawPreparedPlayerLabels() {
 }
 
 static String getVisualSongTitle(const tDispData& data) {
+  if (ND::currentMode == MODE_SERIAL) {
+    return "NDSIF / シリアルモード";
+  }
   String songTitle;
   if (ndConfig.get(CFG_LANG) == LANG_JA) {
     songTitle = data.trackJp;
@@ -958,7 +969,13 @@ void RotatedLabel::setEnabled(bool state) {
   _enabled = state;
 }
 
+static std::atomic<bool> serialFooterPending{false};
+static std::atomic<uint32_t> serialYmClock{4000000};
+static std::atomic<uint32_t> serialOkiClock{8000000};
+static void drawPendingSerialFooter();
+
 static void dispUpdateWorker() {
+  if (ND::currentMode == MODE_SERIAL) drawPendingSerialFooter();
   switch (disp.currentView) {
     case ViewMode::Player: {  // プレイヤーのとき
       if (xSemaphoreTake(spFrameBuffer, 0) == pdTRUE) {
@@ -995,6 +1012,10 @@ static void dispUpdateWorker() {
       break;
     }
     case ViewMode::Visual: {  // ビジュアルモードのとき
+      if (ND::currentMode == MODE_SERIAL) {
+        visualWindow.update();
+        return;
+      }
       int64_t sec = playerWindow.dispData.time;
       if (ND::canPlay == false || ND::isPaused) {
         if (ND::isPaused) {
@@ -1034,6 +1055,11 @@ static void dispUpdateTask(void* param) {
       continue;
     }
     dispUpdateWorker();
+    if (ND::currentMode == MODE_SERIAL && disp.currentView == ViewMode::Visual) {
+      // A slow frame must not turn queued timer notifications into continuous LCD work.
+      // Serial visuals are best-effort: leave at least 20 ms free after each frame.
+      vTaskDelay(pdMS_TO_TICKS(20));
+    }
   }
 }
 
@@ -1291,9 +1317,9 @@ static void drawSerialModeFooter() {
   disp.render.setFontSize(13);
   disp.render.setFontColor(C_YELLOW, C_DARK);
   disp.render.setCursor(27, 284);
-  disp.render.printf("%s", ND::formatChipName(ND::freq[0], CHIP_YM2151).c_str());
+  disp.render.printf("%s", ND::formatChipName(static_cast<si5351Freq_t>(serialYmClock.load(std::memory_order_relaxed)), CHIP_YM2151).c_str());
   disp.render.setCursor(27, 303);
-  disp.render.printf("%s", ND::formatChipName(ND::freq[1], CHIP_OKIM6258).c_str());
+  disp.render.printf("%s", ND::formatChipName(static_cast<si5351Freq_t>(serialOkiClock.load(std::memory_order_relaxed)), CHIP_OKIM6258).c_str());
   disp.render.setFontColor(C_LIGHTGRAY, C_FOOTER_INACTIVE);
   disp.render.setCursor(11, 284);
   disp.render.printf("1");
@@ -1303,7 +1329,17 @@ static void drawSerialModeFooter() {
 }
 
 void serialModeUpdateFooter() {
-  xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
+  // Called by the receive task: enqueue only, never wait for LCD/font rendering.
+  serialYmClock.store(ND::freq[0], std::memory_order_relaxed);
+  serialOkiClock.store(ND::freq[1], std::memory_order_relaxed);
+  serialFooterPending.store(true, std::memory_order_release);
+}
+
+static void drawPendingSerialFooter() {
+  if (!serialFooterPending.load(std::memory_order_acquire) ||
+      disp.currentView != ViewMode::Player ||
+      xSemaphoreTake(spFrameBuffer, 0) != pdTRUE) return;
+  serialFooterPending.exchange(false, std::memory_order_acquire);
   if (ND::currentMode == MODE_SERIAL && disp.currentView == ViewMode::Player) {
     disp.render.setUseRenderTask(false);
     disp.render.setDrawer(frameBuffer);
@@ -1398,7 +1434,9 @@ void PlayerWindow::updateHeader(int64_t sec, bool visible, uint32_t ticksToWait)
 // イベント処理
 void PlayerWindow::eventHandler(event event) {
   if (ND::currentMode == MODE_SERIAL) {
-    if (event == event::Option || event == event::Menu) {
+    if (event == event::Left) {
+      visualWindow.show();
+    } else if (event == event::Option || event == event::Menu) {
       cfgWindow.show();
     }
     return;
@@ -1525,7 +1563,8 @@ void CFGWindow::eventHandler(event event) {
         // Serial.printf("CFG Window::Close event.\n");
         this->close();
         if (ND::currentMode == MODE_SERIAL) {
-          playerWindow.show();
+          if (_returnView == ViewMode::Visual) visualWindow.show();
+          else playerWindow.show();
           break;
         }
         if (ndConfig.get(CFG_CONTROL) == CTRL_2) {
@@ -1941,12 +1980,13 @@ void VisualWindow::drawTimestamp(int64_t sec, bool visible) {
 }
 
 void VisualWindow::drawTimestamp(int64_t sec, bool toFrameBuffer, bool visible) {
+  if (ND::currentMode == MODE_SERIAL) visible = false;
   if (_sprTime.width() == 0) {
     return;
   }
   static constexpr int kTempoHidden = -1;
   static constexpr int kTempoNoteOnly = -2;
-  const int tempoBpm = ND::fileFormat != FileFormat::MDX
+  const int tempoBpm = ND::currentMode == MODE_SERIAL || ND::fileFormat != FileFormat::MDX
                            ? kTempoHidden
                            : (MDX.hasExplicitTempo() ? MDX.getTempoBpm() : kTempoNoteOnly);
   if (_lastTimestampSec == sec && _lastTempoBpm == tempoBpm &&
@@ -2021,6 +2061,8 @@ void VisualWindow::draw() {
     return;
   }
 
+  memset(keyboardSnapshotValid, 0, sizeof(keyboardSnapshotValid));
+
   // OpenFontRenderは内部のFreeType状態を全インスタンスで共有するため、
   // 他画面の描画と競合しない描画ロック内でPlayer用Labelも先行生成する。
   preparePlayerLabels(playerWindow.dispData);
@@ -2038,7 +2080,7 @@ void VisualWindow::draw() {
   lblSongTitle.drawPrepared();
 
   // シャッフル再生のアイコン表示
-  if (ndConfig.get(CFG_SHUFFLE) != TRANDOM_NO) {
+  if (ND::currentMode == MODE_PLAYER && ndConfig.get(CFG_SHUFFLE) != TRANDOM_NO) {
     pushVisualSpriteToFrameBuffer(_sprShuffleOn, 154, 113);
   } else {
     pushVisualSpriteToFrameBuffer(_sprShuffleOff, 154, 113);
@@ -2047,12 +2089,8 @@ void VisualWindow::draw() {
   _lastTimestampSec = INT64_MAX;
   _lastTempoBpm = -1;
   _lastTimestampVisible = false;
-  drawTimestamp(playerWindow.dispData.time, true, true);
+  drawTimestamp(playerWindow.dispData.time, true, ND::currentMode == MODE_PLAYER);
   frameBuffer.pushSprite(0, 0);
-  xSemaphoreGive(spFrameBuffer);
-
-  _lastTimestampSec = INT64_MAX;
-  drawTimestamp(playerWindow.dispData.time);
 
   for (int i = 0; i < 16; i++) {
     lastTrackPan[i] = -1;
@@ -2066,6 +2104,7 @@ void VisualWindow::draw() {
     trackPeakFallSpeedQ8[i] = 0;
     trackPeakHoldFrames[i] = 0;
   }
+  xSemaphoreGive(spFrameBuffer);
   // u32_t t1 = millis();
   //  Serial.printf("VisualWindow::draw time: %d ms\n", t1 - t0);
   disp.stopTimerDrawing = false;  // タイマー更新再開, タイマー側のupdateイベントが先に起こるので
@@ -2075,6 +2114,11 @@ void VisualWindow::draw() {
 void VisualWindow::update() {
   // キー情報更新
   if (disp.currentView == ViewMode::Visual) {
+    if (!tryLockDrawing()) return;
+    if (disp.currentView != ViewMode::Visual) {
+      unlockDrawing();
+      return;
+    }
     // キーボードのスプライト配置
     keyboardBufferSub.setColor(static_cast<uint16_t>(ndConfig.get(CFG_KEYON)));
 
@@ -2084,6 +2128,7 @@ void VisualWindow::update() {
     u8_t noteSnapshot[16];
     u8_t ym2151ChannelMaskSnapshot;
     if (xSemaphoreTake(KeyBoard.keyinfoMutex, 0) != pdTRUE) {
+      unlockDrawing();
       return;
     }
     memcpy(keySnapshot, KeyBoard.keyInfo, sizeof(keySnapshot));
@@ -2094,6 +2139,37 @@ void VisualWindow::update() {
     // decay.
     memset(KeyBoard.trackLevel, 0, sizeof(KeyBoard.trackLevel));
     xSemaphoreGive(KeyBoard.keyinfoMutex);
+
+    if (ND::currentMode == MODE_SERIAL) {
+      static const int notes[16] = {1, 2, 3, -1, 4, 5, 6, -1, 7, 8, 9, -1, 10, 11, 0, -1};
+      static const u8_t carriers[8] = {8, 8, 8, 8, 12, 14, 14, 15};
+      memset(keySnapshot, 0, sizeof(keySnapshot));
+      memset(levelSnapshot, 0, sizeof(levelSnapshot));
+      const float clockSemitones = 12 * log2f(
+          float(serialYmClock.load(std::memory_order_relaxed)) / 3579545.0f);
+      for (int ch = 0; ch < 8; ++ch) {
+        // Pitch and TL may come from adjacent writes; display follows latest state.
+        const uint32_t pitch = FM.visualPitch[ch].load(std::memory_order_relaxed);
+        const uint32_t tl = FM.visualTl[ch].load(std::memory_order_relaxed);
+        const u8_t kc = pitch, kf = pitch >> 8, slots = pitch >> 16, pan = pitch >> 24;
+        const int note = notes[kc & 15];
+        if (slots && note >= 0) {
+          const float semitone = 12 * (((kc >> 4) & 7) + 1 + ((kc & 15) == 14)) +
+              note + (kf >> 2) / 64.0f + clockSemitones;
+          const int n = int(roundf(semitone));
+          if (n >= 12) keySnapshot[YM2151][ch] = {n / 12, n % 12};
+        }
+        panSnapshot[ch] = (pan & 0xc0) == 0xc0 ? PAN_CENTER :
+            (pan & 0x80) ? PAN_LEFT : (pan & 0x40) ? PAN_RIGHT : PAN_MUTE;
+        panSnapshot[ch + 8] = PAN_MUTE; // Raw ADPCM carries no note/channel metadata.
+        for (int op = 0; op < 4; ++op) {
+          if (slots & carriers[pan & 7] & (1 << op)) {
+            const u8_t level = (127 - ((tl >> (8 * op)) & 127)) >> 3;
+            if (level > levelSnapshot[ch]) levelSnapshot[ch] = level;
+          }
+        }
+      }
+    }
 
     for (int i = 0; i < 8; i++) {
       u8_t ymNote = noteInfoToDisplayNoteNo(YM2151, keySnapshot[YM2151][i]);
@@ -2109,21 +2185,22 @@ void VisualWindow::update() {
       noteSnapshot[i + 8] = heldTrackNote[i + 8];
     }
 
-    if (!tryLockDrawing()) {
-      return;
+    const uint16_t keyColor = static_cast<uint16_t>(ndConfig.get(CFG_KEYON));
+    for (int device = 0; device < DEVICE_COUNT; ++device) {
+      const bool changed = !keyboardSnapshotValid[device] || keyColor != drawnKeyboardColor ||
+          memcmp(drawnKeyboardNotes[device], keySnapshot[device], sizeof(keySnapshot[device])) != 0 ||
+          (device == YM2151 && drawnKeyboardMask != ym2151ChannelMaskSnapshot);
+      if (!changed) continue;
+      keyboardBuffer.pushSprite(&keyboardBufferSub, 0, 0);
+      keyboardDrawChannelMask = device == YM2151 ? ym2151ChannelMaskSnapshot : 0;
+      drawKeyboard(keyboardBufferSub, static_cast<t_device>(device), keySnapshot[device]);
+      keyboardDrawChannelMask = 0;
+      pushVisualSpriteToLcd(keyboardBufferSub, device == YM2151 ? 2 : 30, 0);
+      memcpy(drawnKeyboardNotes[device], keySnapshot[device], sizeof(keySnapshot[device]));
+      keyboardSnapshotValid[device] = true;
     }
-
-    // YM2151
-    keyboardBuffer.pushSprite(&keyboardBufferSub, 0, 0);
-    keyboardDrawChannelMask = ym2151ChannelMaskSnapshot;
-    drawKeyboard(keyboardBufferSub, YM2151, keySnapshot[YM2151]);
-    keyboardDrawChannelMask = 0;
-    pushVisualSpriteToLcd(keyboardBufferSub, 2, 0);
-
-    // OKIM6258
-    keyboardBuffer.pushSprite(&keyboardBufferSub, 0, 0);
-    drawKeyboard(keyboardBufferSub, OKIM6258_KEY, keySnapshot[OKIM6258_KEY]);
-    pushVisualSpriteToLcd(keyboardBufferSub, 30, 0);
+    drawnKeyboardMask = ym2151ChannelMaskSnapshot;
+    drawnKeyboardColor = keyColor;
 
     for (int i = 0; i < 16; i++) {
       u8_t displayLevel = updateTrackLevelWaterfall(i, levelSnapshot[i]);
@@ -2211,6 +2288,7 @@ boolean VisualWindow::drawKeyboard(LGFX_Sprite& sprite, t_device device, const N
 
 // イベント処理
 void VisualWindow::eventHandler(event ev) {
+  if (ND::currentMode == MODE_SERIAL && ev == event::Menu) ev = event::Option;
   switch (ev) {
     case event::Option: {
       cfgWindow.show();
@@ -2315,7 +2393,7 @@ void VisualWindow::show() {
   disp.stopTimerDrawing = true;
   disp.currentView = ViewMode::Visual;
   disp.lastView = ViewMode::Visual;
-  ndConfig.saveLastView(LAST_VIEW_VISUAL);
+  if (ND::currentMode == MODE_PLAYER) ndConfig.saveLastView(LAST_VIEW_VISUAL);
   draw();
   disp.stopTimerDrawing = false;
 }

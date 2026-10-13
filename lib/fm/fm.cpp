@@ -173,6 +173,10 @@ void FMChip::begin() {
 }
 
 void FMChip::reset() {
+  for (unsigned ch = 0; ch < 8; ++ch) {
+    visualPitch[ch].store(0, std::memory_order_relaxed);
+    visualTl[ch].store(0, std::memory_order_relaxed);
+  }
   CS0_LOW;
   CS1_LOW;
   // CS2_LOW;
@@ -470,6 +474,25 @@ void FMChip::setRegisterOPM(byte addr, byte data, u8_t chipno, boolean temp) {
   CS0_HIGH;
   portEXIT_CRITICAL(&gpioMux);
   ets_delay_us(21);  // 68サイクル, 19us @ 3.57MHz, 17us @ 4MHz
+  if (!temp) {
+    // setRegisterOPM's mutex serializes producers. The display never takes it.
+    const unsigned ch = addr == 0x08 ? data & 7 : addr & 7;
+    int shift = addr == 0x08 ? 16 :
+        (addr >= 0x20 && addr <= 0x27) ? 24 :
+        (addr >= 0x28 && addr <= 0x2f) ? 0 :
+        (addr >= 0x30 && addr <= 0x37) ? 8 : -1;
+    if (shift >= 0) {
+      const uint32_t value = addr == 0x08 ? (data >> 3) & 15 : ym2151_reg[addr];
+      const uint32_t old = visualPitch[ch].load(std::memory_order_relaxed);
+      visualPitch[ch].store((old & ~(0xffu << shift)) | (value << shift),
+                            std::memory_order_relaxed);
+    } else if (addr >= 0x60 && addr <= 0x7f) {
+      shift = ((addr - 0x60) / 8) * 8;
+      const uint32_t old = visualTl[ch].load(std::memory_order_relaxed);
+      visualTl[ch].store((old & ~(0xffu << shift)) | (uint32_t(data) << shift),
+                         std::memory_order_relaxed);
+    }
+  }
   xSemaphoreGive(spYM2151);
 }
 

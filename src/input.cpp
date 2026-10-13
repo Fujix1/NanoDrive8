@@ -666,7 +666,9 @@ void Input::inputHandler() {
   switch (disp.currentView) {
     case ViewMode::Player: {  // プレイヤーのとき
       if (ND::currentMode == MODE_SERIAL) {
-        if (inputBuffer == btn10 || inputBuffer == btn20) {
+        if (inputBuffer == btn00) {
+          sendEventToQueue(event::Left);
+        } else if (inputBuffer == btn10 || inputBuffer == btn20) {
           sendEventToQueue(event::Option);
         }
         break;
@@ -719,6 +721,12 @@ void Input::inputHandler() {
       break;
     }
     case ViewMode::Visual: {  // ビジュアル
+      if (ND::currentMode == MODE_SERIAL) {
+        if (inputBuffer == btn00) sendEventToQueue(event::Close);
+        else if (inputBuffer == btn10 || inputBuffer == btn20)
+          sendEventToQueue(event::Option);
+        break;
+      }
       switch (inputBuffer) {
         case btn00:
           if (isControlSet2) {

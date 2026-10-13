@@ -146,6 +146,9 @@ void setup() {
   // Lovyanの初期化で上書きされるので、initDisp();の後に呼び出す
   FM.begin();
 
+  // 両モードで使用する鍵盤・メーター画像を、受信開始前に初期化する。
+  visualWindow.init();
+
   // シリアルモードでは SD や再生用タスクを初期化せず、設定画面と入力を有効にする。
   if (ND::currentMode == MODE_SERIAL) {
     if (Leds.init()) {
@@ -161,9 +164,6 @@ void setup() {
   }
 
   FM.reset();
-
-  // ビジュアル初期化
-  visualWindow.init();
 
   // SD初期化
   if (!ndFile.init()) {

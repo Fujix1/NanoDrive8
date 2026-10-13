@@ -4,6 +4,7 @@
 #include <soc/gpio_reg.h>
 
 #include <vector>
+#include <atomic>
 
 #include "../../include/util.h"
 #include "SI5351_types.hpp"
@@ -45,6 +46,8 @@
 #define CS2_HIGH (REG_WRITE(GPIO_OUT1_W1TS_REG, (1 << (CS2 - 32))))
 #define CS2_LOW (REG_WRITE(GPIO_OUT1_W1TC_REG, (1 << (CS2 - 32))))
 
+static_assert(ATOMIC_INT_LOCK_FREE == 2, "Visual mirror requires lock-free 32-bit atomics");
+
 class FMChip {
  public:
   // FMChip();
@@ -66,6 +69,11 @@ class FMChip {
   void applyPendingChannelMask();
   void toggleChannelMask(u8_t ch);
   void refreshChannelMaskLeds();
+
+  // Display-only mirror: lock-free loads/stores, never shared with the OKI ISR.
+  // pitch: KC, KF, key-on slots, pan/algorithm (one byte each).
+  std::atomic<uint32_t> visualPitch[8]{};
+  std::atomic<uint32_t> visualTl[8]{};
 
   u8_t ym2151_reg[256] = {0};
   bool ym2151_iskeyOn[8] = {false};
