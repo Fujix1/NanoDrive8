@@ -84,9 +84,7 @@ void setup() {
   pinMode(A1, OUTPUT);
 
   // HWCDC の起動後の resize は RX キューを削除するため、割り込み開始前に確保する。
-  const size_t usbRxSize = Serial.setRxBufferSize(SerialMan::USB_RX_SIZE);
-  configASSERT(usbRxSize == SerialMan::USB_RX_SIZE);
-  Serial.begin(115200);
+  serialMan.beginUsb();
   Serial.printf("Heap - %'d Bytes free\n", ESP.getFreeHeap());
   Serial.printf("Flash - %'d Bytes at %'d\n", ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
   Serial.printf("PSRAM - Total %'d, Free %'d\n", ESP.getPsramSize(), ESP.getFreePsram());
@@ -106,19 +104,6 @@ void setup() {
 
   delay(100);  // 安定用必須
 
-  // GPIO ISR サービスは全ピン共通。入力の attachInterrupt() より先に、
-  // C ハンドラと FreeRTOS ISR API を使用できるレベル 3 で確保する。
-  // 現在の OKI ISR は PSRAM 上の曲データも読むため、IRAM フラグは付けない。
-  ESP_ERROR_CHECK(gpio_install_isr_service(ESP_INTR_FLAG_LEVEL3));
-
-  // ﾆｭｳﾘｮｸ
-  if (input.init()) {
-    lcd.printf("Input initialized.\n");
-  } else {
-    lcd.printf("[ERROR] Input IC TCA8418 failed.\n");
-  }
-  delay(100);
-
   // PSRAM 初期化確認
   if (psramInit()) {
     lcd.printf("PSRAM initialized.\n");
@@ -131,6 +116,22 @@ void setup() {
   ndConfig.init();
   ndConfig.loadCfg();
   const tLastView savedLastView = ndConfig.loadLastView();
+
+  // The GPIO service is shared by OKI and input pins. Serial audio reads
+  // internal RAM only: keep its requests serviced while NVS writes disable
+  // the flash cache. Player audio still reads PSRAM, so retain its existing
+  // non-IRAM allocation. Choose after loading the mode, before adding input.
+  const int gpioIsrFlags = ESP_INTR_FLAG_LEVEL3 |
+      (ND::currentMode == MODE_SERIAL ? ESP_INTR_FLAG_IRAM : 0);
+  ESP_ERROR_CHECK(gpio_install_isr_service(gpioIsrFlags));
+
+  // ﾆｭｳﾘｮｸ
+  if (input.init()) {
+    lcd.printf("Input initialized.\n");
+  } else {
+    lcd.printf("[ERROR] Input IC TCA8418 failed.\n");
+  }
+  delay(100);
 
   // NJU72342 初期化
   nju72342.init(I2C_SDA, I2C_SCL, I2C_CLOCK, ndConfig.get(CFG_FADEOUT), true);

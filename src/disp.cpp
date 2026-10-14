@@ -5,6 +5,7 @@
 #include <cstdio>
 #include <cstring>
 
+#include "serialaudio.h"
 #include "pics.h"
 #include "png_renderer.h"
 
@@ -454,8 +455,35 @@ static u8_t updateTrackPeakHold(u8_t trackNo) {
   return (u8_t)(peakQ8 >> 8);
 }
 
+// Caller holds spFrameBuffer. Also clear hidden-window history on protocol RESET.
+static void resetVisualHistory() {
+  memset(keyboardSnapshotValid, 0, sizeof(keyboardSnapshotValid));
+  for (int i = 0; i < 16; i++) {
+    lastTrackPan[i] = -1;
+    lastTrackLevel[i] = -1;
+    lastTrackPeak[i] = -1;
+    lastTrackNote[i] = -1;
+    heldTrackNote[i] = 0xff;
+    trackLevelDisplayQ8[i] = 0;
+    trackLevelFallSpeedQ8[i] = 0;
+    trackPeakDisplayQ8[i] = 0;
+    trackPeakFallSpeedQ8[i] = 0;
+    trackPeakHoldFrames[i] = 0;
+  }
+}
+
 static TimerHandle_t hDispTimer;
 static TaskHandle_t hDispUpdateTask;
+static SemaphoreHandle_t serialVisualResetDone;
+static std::atomic<bool> serialVisualResetPending{false};
+
+void serialModeResetVisual() {
+  // The serial receiver is the only caller. Audio has already stopped on RESET.
+  configASSERT(hDispUpdateTask != nullptr && serialVisualResetDone != nullptr);
+  serialVisualResetPending.store(true, std::memory_order_release);
+  xTaskNotifyGive(hDispUpdateTask);
+  xSemaphoreTake(serialVisualResetDone, portMAX_DELAY);
+}
 
 static Label lblTitle =
     Label(0, 28, LCD_W, C_ACCENT_LIGHT, C_BASEBG, 21, SCROLL_SPEED_TITLE, Align::TopCenter);
@@ -1051,6 +1079,22 @@ static void dispUpdateTask(void* param) {
     while (ulTaskNotifyTake(pdTRUE, 0) > 0) {
       // queue collapse: 最新状態だけ描画
     }
+    // Forced RESET redraw must run even when Config/other views suspend the timer.
+    if (serialVisualResetPending.exchange(false, std::memory_order_acquire)) {
+      xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
+      resetVisualHistory();
+      if (disp.currentView == ViewMode::Visual) {
+        // Visual updates draw directly to LCD; frameBuffer retains the initial
+        // screen. Redraw only the existing title sprite (also reset its scroll),
+        // then transfer the background, without font loading or sprite allocation.
+        lblSongTitle.drawPrepared();
+        frameBuffer.pushSprite(0, 0);
+        lcd.waitDMA();
+      }
+      xSemaphoreGive(spFrameBuffer);
+      xSemaphoreGive(serialVisualResetDone);
+      continue;
+    }
     if (disp.stopTimerDrawing) {
       continue;
     }
@@ -1127,6 +1171,8 @@ bool Disp::init() {
 
   this->stopTimerDrawing = true;
   hDispUpdateTask = NULL;
+  serialVisualResetDone = xSemaphoreCreateBinary();
+  if (serialVisualResetDone == nullptr) return false;
 
   BaseType_t taskOk =
       xTaskCreatePinnedToCore(dispUpdateTask, "dispUpdate", DISP_UPDATE_TASK_STACK, NULL,
@@ -1490,6 +1536,37 @@ PlayerWindow playerWindow = PlayerWindow();
 ConfigPanelRenderer configRenderer;
 static Panel pnlConfig = Panel(0, 26, LCD_W, 264, CFG_ITEM_HEIGHT, &configRenderer);
 
+// FreeType has a shared library lifetime in OpenFontRender. Keep one font
+// loaded for the entire panel update, rather than loading/unloading per row
+// while another renderer still owns a face from the same library.
+class ScopedConfigFont {
+ public:
+  ScopedConfigFont() {
+    disp.render.setUseRenderTask(false);
+    disp.render.loadFont(fontMain, sizeof(fontMain));
+  }
+  ~ScopedConfigFont() { disp.render.unloadFont(); }
+};
+
+static void pushConfigFrame() {
+  if (ND::currentMode != MODE_SERIAL) {
+    frameBuffer.pushSprite(0, 0);
+    return;
+  }
+  // Configuration runs on both the input core and loop core (encoder).
+  // Finish each small SPI transfer before sleeping so USB and audio service
+  // can run even during continuous scrolling. Do not yield holding an LCD
+  // transaction or leave DMA reading a buffer that the next update modifies.
+  constexpr int stripHeight = 16;
+  for (int y = 0; y < LCD_H; y += stripHeight) {
+    lcd.setClipRect(0, y, LCD_W, (LCD_H - y < stripHeight ? LCD_H - y : stripHeight));
+    frameBuffer.pushSprite(0, 0);
+    lcd.waitDMA();
+    vTaskDelay(1);
+  }
+  lcd.clearClipRect();
+}
+
 void ConfigPanelRenderer::onDrawItem(LGFX_Sprite& target, int itemIndex, int x, int y, int width,
                                      bool selected) {
   cfgWindow.drawItem(target, itemIndex, x, y, width, selected);
@@ -1680,38 +1757,39 @@ void CFGWindow::drawPanelView() {
   }
 
   xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
+  {
+    ScopedConfigFont font;
 
-  frameBuffer.fillSprite(TFT_WHITE);
+    frameBuffer.fillSprite(TFT_WHITE);
 
-  if (ndConfig.get(CFG_LANG) == LANG_JA) {
-    _sprHeaderJP.pushSprite(&frameBuffer, 0, 0);
-  } else {
-    _sprHeaderEN.pushSprite(&frameBuffer, 0, 0);
+    if (ndConfig.get(CFG_LANG) == LANG_JA) {
+      _sprHeaderJP.pushSprite(&frameBuffer, 0, 0);
+    } else {
+      _sprHeaderEN.pushSprite(&frameBuffer, 0, 0);
+    }
+
+    frameBuffer.fillRoundRect(124, 293, 42, 23, 2, C_FOOTER_ACTIVE);
+
+    disp.render.setDrawer(frameBuffer);
+    disp.render.setAlignment(Align::TopCenter);
+    disp.render.setFontColor(C_LIGHTGRAY, C_FOOTER_ACTIVE);
+
+    disp.render.setFontSize(17);
+    disp.render.setCursor(124 + 42 / 2, 297);
+    disp.render.printf("OK");
+
+    disp.render.setAlignment(Align::TopLeft);
+    pnlConfig.setItemCount(itemCount);
+    pnlConfig.currentIndex = currentItemIndex;
+    pnlConfig.ensureVisible();
+    pnlConfig.invalidate();
+    pnlConfig.update(frameBuffer);
+    currentItemIndex = pnlConfig.currentIndex;
+
+    drawFooter(true);
+
   }
-
-  frameBuffer.fillRoundRect(124, 293, 42, 23, 2, C_FOOTER_ACTIVE);
-
-  disp.render.setDrawer(frameBuffer);
-  disp.render.setAlignment(Align::TopCenter);
-  disp.render.setFontColor(C_LIGHTGRAY, C_FOOTER_ACTIVE);
-
-  disp.render.loadFont(fontMain, sizeof(fontMain));
-  disp.render.setFontSize(17);
-  disp.render.setCursor(124 + 42 / 2, 297);
-  disp.render.printf("OK");
-
-  disp.render.setAlignment(Align::TopLeft);
-  pnlConfig.setItemCount(itemCount);
-  pnlConfig.currentIndex = currentItemIndex;
-  pnlConfig.ensureVisible();
-  pnlConfig.invalidate();
-  pnlConfig.update(frameBuffer);
-  currentItemIndex = pnlConfig.currentIndex;
-
-  drawFooter(true);
-
-  disp.render.unloadFont();
-  frameBuffer.pushSprite(0, 0);
+  pushConfigFrame();
   xSemaphoreGive(spFrameBuffer);
 }
 
@@ -1726,13 +1804,16 @@ void CFGWindow::refreshPanel() {
   }
 
   xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
-  pnlConfig.setItemCount(itemCount);
-  pnlConfig.currentIndex = currentItemIndex;
-  pnlConfig.invalidate();
-  pnlConfig.update(frameBuffer);
-  currentItemIndex = pnlConfig.currentIndex;
-  drawFooter(true);
-  frameBuffer.pushSprite(0, 0);
+  {
+    ScopedConfigFont font;
+    pnlConfig.setItemCount(itemCount);
+    pnlConfig.currentIndex = currentItemIndex;
+    pnlConfig.invalidate();
+    pnlConfig.update(frameBuffer);
+    currentItemIndex = pnlConfig.currentIndex;
+    drawFooter(true);
+  }
+  pushConfigFrame();
   xSemaphoreGive(spFrameBuffer);
 }
 
@@ -1747,28 +1828,31 @@ void CFGWindow::refreshCurrentItem() {
   }
 
   xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
-  pnlConfig.setItemCount(itemCount);
-  pnlConfig.currentIndex = currentItemIndex;
-  pnlConfig.ensureVisible();
-  currentItemIndex = pnlConfig.currentIndex;
+  {
+    ScopedConfigFont font;
+    pnlConfig.setItemCount(itemCount);
+    pnlConfig.currentIndex = currentItemIndex;
+    pnlConfig.ensureVisible();
+    currentItemIndex = pnlConfig.currentIndex;
 
-  const int itemY = pnlConfig.y + currentItemIndex * CFG_ITEM_HEIGHT - pnlConfig.scrollTop;
-  const bool fullyVisible =
-      itemY >= pnlConfig.y && itemY + CFG_ITEM_HEIGHT <= pnlConfig.y + pnlConfig.height;
+    const int itemY = pnlConfig.y + currentItemIndex * CFG_ITEM_HEIGHT - pnlConfig.scrollTop;
+    const bool fullyVisible =
+        itemY >= pnlConfig.y && itemY + CFG_ITEM_HEIGHT <= pnlConfig.y + pnlConfig.height;
 
-  if (fullyVisible) {
-    drawItem(frameBuffer, currentItemIndex, pnlConfig.x, itemY, pnlConfig.itemWidth(), true);
-    _sprite.pushSprite(&lcd, pnlConfig.x, itemY);
+    if (fullyVisible) {
+      drawItem(frameBuffer, currentItemIndex, pnlConfig.x, itemY, pnlConfig.itemWidth(), true);
+      _sprite.pushSprite(&lcd, pnlConfig.x, itemY);
 
-    drawFooter(true);
-    _sprFooter.pushSprite(&lcd, 0, 293);
-  } else {
-    pnlConfig.invalidate();
-    pnlConfig.update(frameBuffer);
-    drawFooter(true);
-    frameBuffer.pushSprite(0, 0);
+      drawFooter(true);
+      _sprFooter.pushSprite(&lcd, 0, 293);
+    } else {
+      pnlConfig.invalidate();
+      pnlConfig.update(frameBuffer);
+      drawFooter(true);
+      pushConfigFrame();
+    }
+    lcd.waitDMA();
   }
-
   xSemaphoreGive(spFrameBuffer);
 }
 
@@ -1780,14 +1864,17 @@ void CFGWindow::selectItem(int index) {
   if (index >= itemCount) index = itemCount - 1;
 
   xSemaphoreTake(spFrameBuffer, portMAX_DELAY);
-  currentItemIndex = index;
-  pnlConfig.setItemCount(itemCount);
-  pnlConfig.currentIndex = currentItemIndex;
-  pnlConfig.ensureVisible();
-  pnlConfig.update(frameBuffer);
-  currentItemIndex = pnlConfig.currentIndex;
-  drawFooter(true);
-  frameBuffer.pushSprite(0, 0);
+  {
+    ScopedConfigFont font;
+    currentItemIndex = index;
+    pnlConfig.setItemCount(itemCount);
+    pnlConfig.currentIndex = currentItemIndex;
+    pnlConfig.ensureVisible();
+    pnlConfig.update(frameBuffer);
+    currentItemIndex = pnlConfig.currentIndex;
+    drawFooter(true);
+  }
+  pushConfigFrame();
   xSemaphoreGive(spFrameBuffer);
 }
 
@@ -1830,19 +1917,17 @@ void CFGWindow::drawItem(LGFX_Sprite& target, int index, int x, int y, int width
     }
   }
 
-  OpenFontRender ofr;
+  OpenFontRender& ofr = disp.render;
   ofr.setDrawer(_sprite);
 
   String label;
   String option;
   int fontSize;
   if (ndConfig.get(CFG_LANG) == LANG_JA) {
-    ofr.loadFont(fontMain, sizeof(fontMain));
     fontSize = 17;
     label = ndConfig.items[index].labelJp;
     option = ndConfig.items[index].optionsJp[ndConfig.items[index].index];
   } else {
-    ofr.loadFont(fontMain, sizeof(fontMain));
     fontSize = 16;
     label = ndConfig.items[index].labelEn;
     option = ndConfig.items[index].optionsEn[ndConfig.items[index].index];
@@ -1858,15 +1943,15 @@ void CFGWindow::drawItem(LGFX_Sprite& target, int index, int x, int y, int width
   ofr.setAlignment(Align::TopLeft);
   ofr.setFontColor(titleTextColor, backgroundColor);
   ofr.setCursor(5, (CFG_ITEM_HEIGHT - fontSize) / 2);
-  ofr.printf(label.c_str());
+  ofr.printf("%s", label.c_str());
 
   ofr.setFontColor(optionTextColor, backgroundColor);
   ofr.setAlignment(Align::TopRight);
   ofr.setCursor(width - 5, (CFG_ITEM_HEIGHT - fontSize) / 2);
-  ofr.printf(option.c_str());
+  ofr.printf("%s", option.c_str());
 
-  ofr.unloadFont();
   _sprite.pushSprite(&target, x, y);
+  if (ND::currentMode == MODE_SERIAL) vTaskDelay(1);
 }
 
 void CFGWindow::drawFooter(bool toFrameBuffer) {
@@ -2092,18 +2177,7 @@ void VisualWindow::draw() {
   drawTimestamp(playerWindow.dispData.time, true, ND::currentMode == MODE_PLAYER);
   frameBuffer.pushSprite(0, 0);
 
-  for (int i = 0; i < 16; i++) {
-    lastTrackPan[i] = -1;
-    lastTrackLevel[i] = -1;
-    lastTrackPeak[i] = -1;
-    lastTrackNote[i] = -1;
-    heldTrackNote[i] = 0xff;
-    trackLevelDisplayQ8[i] = 0;
-    trackLevelFallSpeedQ8[i] = 0;
-    trackPeakDisplayQ8[i] = 0;
-    trackPeakFallSpeedQ8[i] = 0;
-    trackPeakHoldFrames[i] = 0;
-  }
+  resetVisualHistory();
   xSemaphoreGive(spFrameBuffer);
   // u32_t t1 = millis();
   //  Serial.printf("VisualWindow::draw time: %d ms\n", t1 - t0);
@@ -2145,6 +2219,7 @@ void VisualWindow::update() {
       static const u8_t carriers[8] = {8, 8, 8, 8, 12, 14, 14, 15};
       memset(keySnapshot, 0, sizeof(keySnapshot));
       memset(levelSnapshot, 0, sizeof(levelSnapshot));
+      levelSnapshot[8] = SerialAudio::takeMeterLevel();
       const float clockSemitones = 12 * log2f(
           float(serialYmClock.load(std::memory_order_relaxed)) / 3579545.0f);
       for (int ch = 0; ch < 8; ++ch) {
@@ -2169,6 +2244,10 @@ void VisualWindow::update() {
           }
         }
       }
+    }
+
+    if (ND::currentMode == MODE_SERIAL) {
+      panSnapshot[8] = static_cast<tPan>(SerialAudio::displayPan());
     }
 
     for (int i = 0; i < 8; i++) {

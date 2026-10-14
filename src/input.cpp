@@ -2,6 +2,7 @@
 
 #include <Adafruit_TCA8418.h>
 #include <driver/gpio.h>
+#include <soc/gpio_reg.h>
 
 #include "disp.h"
 #include "file.h"
@@ -158,8 +159,12 @@ static bool releasePlayHold() {
 
 // 現在の AB 相を 2 bit 状態にまとめて返す。
 static inline u8_t IRAM_ATTR readEncoderState() {
-  const u8_t a = gpio_get_level(static_cast<gpio_num_t>(kEncoderPinA)) ? 1 : 0;
-  const u8_t b = gpio_get_level(static_cast<gpio_num_t>(kEncoderPinB)) ? 1 : 0;
+  // gpio_get_level() lives in flash in this Arduino SDK. All callbacks in
+  // the shared IRAM GPIO service must remain safe with the cache disabled.
+  static_assert(kEncoderPinA >= 32 && kEncoderPinB >= 32, "Encoder uses GPIO bank 1");
+  const uint32_t pins = REG_READ(GPIO_IN1_REG);
+  const u8_t a = (pins >> (kEncoderPinA - 32)) & 1;
+  const u8_t b = (pins >> (kEncoderPinB - 32)) & 1;
   return static_cast<u8_t>((a << 1) | b);
 }
 
@@ -182,6 +187,8 @@ void IRAM_ATTR encoderGpioIrq() {
   encoderIsrLastState = state;
   encoderDirty = true;
 }
+
+static void IRAM_ATTR encoderPinIrq(void*) { encoderGpioIrq(); }
 
 // 積算済みの移動量を破棄して現在のAB状態を基準にし直す。
 static void resetEncoderState() {
@@ -412,7 +419,7 @@ static void tcaSetLock(bool lock) {
 }
 
 // TCA8418 割り込み
-void TCA8418_irq() {
+void IRAM_ATTR TCA8418_irq(void*) {
   if (tcaTaskHandle == nullptr) return;
   BaseType_t hpTaskWoken = pdFALSE;
   vTaskNotifyGiveFromISR(tcaTaskHandle, &hpTaskWoken);
@@ -554,8 +561,12 @@ bool Input::init() {
   pinMode(kEncoderPinA, INPUT);
   pinMode(kEncoderPinB, INPUT);
   resetEncoderState();
-  attachInterrupt(digitalPinToInterrupt(kEncoderPinA), encoderGpioIrq, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(kEncoderPinB), encoderGpioIrq, CHANGE);
+  // Arduino's __onPinInterrupt wrapper is in flash in this SDK. Register
+  // callbacks directly in the pre-installed shared GPIO ISR service.
+  ESP_ERROR_CHECK(gpio_set_intr_type(static_cast<gpio_num_t>(kEncoderPinA), GPIO_INTR_ANYEDGE));
+  ESP_ERROR_CHECK(gpio_isr_handler_add(static_cast<gpio_num_t>(kEncoderPinA), encoderPinIrq, nullptr));
+  ESP_ERROR_CHECK(gpio_set_intr_type(static_cast<gpio_num_t>(kEncoderPinB), GPIO_INTR_ANYEDGE));
+  ESP_ERROR_CHECK(gpio_isr_handler_add(static_cast<gpio_num_t>(kEncoderPinB), encoderPinIrq, nullptr));
 
   // キュー作成
   xQueueInput = xQueueCreate(1, sizeof(event));
@@ -568,7 +579,8 @@ bool Input::init() {
   // 優先度 1 で ADPCMの割り込み 2 より低くしないとコンフリクトする
   xTaskCreatePinnedToCore(tcaTask, "tcaTask", 4096, nullptr, 1, nullptr,
                           PRO_CPU_NUM);  // メインコア
-  attachInterrupt(digitalPinToInterrupt(TCA8418_IRQ_PIN), TCA8418_irq, FALLING);
+  ESP_ERROR_CHECK(gpio_set_intr_type(static_cast<gpio_num_t>(TCA8418_IRQ_PIN), GPIO_INTR_NEGEDGE));
+  ESP_ERROR_CHECK(gpio_isr_handler_add(static_cast<gpio_num_t>(TCA8418_IRQ_PIN), TCA8418_irq, nullptr));
 
   if (!keypad.begin(TCA8418_DEFAULT_ADDR, &Wire)) {
     Serial.println("Failed: TCA8418 init.");

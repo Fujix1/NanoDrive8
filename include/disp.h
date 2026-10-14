@@ -76,6 +76,8 @@ typedef struct {
 // void redrawOnCore0();
 bool openPNG(String path, bool AA, bool sprite);
 void serialModeUpdateFooter();
+// RESET only: wait for the display task to clear Visual history and repaint if visible.
+void serialModeResetVisual();
 void serialModeDraw();  // シリアルモード画面描画
 
 // 現在の画面表示モード

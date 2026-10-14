@@ -39,6 +39,8 @@ class NJU72342 {
   void panMute();
   void panUnmute();
   void panSetPan(tPan pan);
+  // Control-task accessor: position after applying the configured L/R inversion.
+  tPan getPan() const { return _pan; }
   void startFadeout(u16_t length = 0);  // ms
   void startMdxFadeout(u16_t length);    // ms
   void setFadeoutDuration(u16_t fadeOutDuration, bool temp = false);

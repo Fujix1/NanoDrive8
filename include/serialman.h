@@ -9,6 +9,7 @@ class SerialMan {
  public:
   // USB の RX キューは Serial.begin() より前に確保する。
   static constexpr size_t USB_RX_SIZE = 8192;
+  static constexpr size_t USB_TX_SIZE = 512;
   static constexpr size_t RECEIVE_SIZE = 8192;
 
   struct ReceiveStatus {
@@ -24,6 +25,7 @@ class SerialMan {
     uint32_t lastReceiveMs = 0;
   };
 
+  void beginUsb();
   void init();
   void startSerialTask();
   // タスク専用。read() の消費者は NDSIF 受信タスクのみ。
@@ -35,6 +37,7 @@ class SerialMan {
   static void serialTask(void* arg);
   void receive();
   void processCommands();
+  void serviceUsbTx();
   void resetReceiveLocked(uint32_t reason);
   SemaphoreHandle_t receiveMutex = nullptr;
   TaskHandle_t receiveTask = nullptr;
@@ -42,6 +45,7 @@ class SerialMan {
   size_t receiveHead = 0;
   size_t receiveTail = 0;
   size_t usbDiscardRemaining = 0;
+  int usbTxIdleSpace = 0;
   ReceiveStatus status;
   bool protocolResetPending = false;
   uint32_t transportLossPending = 0;

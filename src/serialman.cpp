@@ -3,6 +3,7 @@
 
 #include <esp_heap_caps.h>
 #include <freertos/task.h>
+#include <hal/usb_serial_jtag_ll.h>
 
 #include "NJU72342.h"
 #include "SI5351.hpp"
@@ -30,6 +31,10 @@ void resetChips() {
   FM.reset();
   okim6258.reset();
   FM.setOKIM6258command(0x01, 1);
+  // Protocol builds its RESET reply only after this callback returns.
+  // Stop audio first; wait for the display task only during RESET, never playback.
+  serialModeResetVisual();
+  SerialAudio::prepareOutput();
   nju72342.unmute();
 }
 
@@ -62,6 +67,34 @@ void setChipClockImpl(uint8_t chipID, uint32_t hz, bool drawFooter) {
 void setChipClock(uint8_t chipID, uint32_t hz) { setChipClockImpl(chipID, hz, true); }
 void setOkiClock(uint32_t hz) { setChipClockImpl(CHIP_OKIM6258, hz, false); }
 }  // namespace
+
+void SerialMan::beginUsb() {
+  // Resize only before the USB ISR starts. Measure the empty byte-ring's
+  // usable space, which may differ from its allocated size.
+  const size_t rxSize = Serial.setRxBufferSize(USB_RX_SIZE);
+  const size_t txSize = Serial.setTxBufferSize(USB_TX_SIZE);
+  configASSERT(rxSize == USB_RX_SIZE && txSize == USB_TX_SIZE);
+  Serial.begin(115200);
+  usbTxIdleSpace = Serial.availableForWrite();
+  configASSERT(usbTxIdleSpace > 0);
+}
+
+void SerialMan::serviceUsbTx() {
+  // HWCDC clears IN_EMPTY and returns without draining its TX ring when
+  // isPlugged() momentarily becomes false. Protocol::consumeOutput() has
+  // already handed the reply off, and one-way AUDIO_DATA will not wake TX.
+  // Recover queued bytes even when there is no pending protocol response.
+  if (usbTxIdleSpace <= 0 || Serial.availableForWrite() >= usbTxIdleSpace) return;
+  // beginUsb() and this task run on APP_CPU_NUM, where the USB ISR lives.
+  // Protect the writable check + empty-FIFO flush against that ISR filling
+  // the FIFO between them. No ring-buffer operation runs with IRQs disabled.
+  portENTER_CRITICAL(&usbEventMux);
+  if (usb_serial_jtag_ll_txfifo_writable()) {
+    usb_serial_jtag_ll_ena_intr_mask(USB_SERIAL_JTAG_INTR_SERIAL_IN_EMPTY);
+    usb_serial_jtag_ll_txfifo_flush();
+  }
+  portEXIT_CRITICAL(&usbEventMux);
+}
 
 // シリアルモード初期化
 void SerialMan::init() {
@@ -108,6 +141,7 @@ void SerialMan::serialTask(void* arg) {
     SerialAudio::service();
     receiver.receive();
     receiver.processCommands();
+    receiver.serviceUsbTx();
     SerialAudio::service();
     if (audioFooterPending) { audioFooterPending = false; serialModeUpdateFooter(); }
     vTaskDelay(1);
