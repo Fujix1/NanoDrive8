@@ -5,17 +5,17 @@
 #include <stdint.h>
 
 namespace ndsif {
-// Immediate controls plus experimental continuous-ADPCM callbacks (0x58..0x5b).
+// Formal-v1 draft framing; ND8 implements YM2151 and the optional OKI stream.
 class Protocol {
  public:
   static constexpr size_t MAX_PAYLOAD = 256;
-  static constexpr size_t MAX_RAW = 8 + MAX_PAYLOAD + 2;
+  static constexpr size_t MAX_RAW = 9 + MAX_PAYLOAD + 2;
   static constexpr size_t MAX_ENCODED = MAX_RAW + MAX_RAW / 254 + 1;
   static constexpr uint32_t FRAME_TIMEOUT_MS = 500;
   using Reset = void (*)();
   using WriteYM = void (*)(uint8_t, uint8_t);
   using Audio = size_t (*)(uint8_t, const uint8_t*, size_t, uint8_t*);
-  using SetClock = void (*)(uint8_t, uint32_t);
+  using SetClock = bool (*)(uint8_t, uint8_t, uint32_t);
   using SetVolume = void (*)(uint8_t);
 
   void configure(Reset reset, WriteYM write, const char* firmware, SetClock clock = nullptr,

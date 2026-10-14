@@ -240,7 +240,14 @@ void service() {
 }
 
 size_t command(uint8_t opcode, const uint8_t* data, size_t size, uint8_t* response) {
-  if (opcode == 0x5b) {
+  // Every stream command explicitly selects the physical OKI's logical instance.
+  if (size < 2 || data[0] != 0xb7 || data[1] != 0) {
+    if (opcode != 0x13) reject();
+    return 0;
+  }
+  data += 2;
+  size -= 2;
+  if (opcode == 0x13) {
     portENTER_CRITICAL(&mux);
     const uint32_t values[] = {written, consumed, written - consumed, underflows,
         overflows, rejected, highWater,
@@ -256,8 +263,8 @@ size_t command(uint8_t opcode, const uint8_t* data, size_t size, uint8_t* respon
   portEXIT_CRITICAL(&mux);
   if (failed) return 0;
 
-  if (opcode == 0x58) {
-    if (size < 5 || size > 256) { reject(); return 0; }
+  if (opcode == 0x10) {
+    if (size < 5 || size > 254) { reject(); return 0; }
     const uint32_t position = get32(data);
     const uint32_t count = size - 4;
     portENTER_CRITICAL(&mux);
@@ -278,7 +285,7 @@ size_t command(uint8_t opcode, const uint8_t* data, size_t size, uint8_t* respon
 #if ND_SERIAL_ADPCM_METER
     if (meterAvailable) meter.enqueue(start, data + 4, count);
 #endif
-  } else if (opcode == 0x59) {
+  } else if (opcode == 0x11) {
     if (size < 6) { reject(); return 0; }
     const uint32_t position = get32(data);
     const uint8_t kind = data[4];
@@ -293,9 +300,13 @@ size_t command(uint8_t opcode, const uint8_t* data, size_t size, uint8_t* respon
       if (!valid) reject();
       return 0;
     }
-    const unsigned count = kind == 0 ? (size - 5) / 2 : 1;
+    // Register events include the target logical chip, instance and page.
+    if (kind == 0 && (size < 10 || data[5] != 0x54 || data[6] != 0 || data[7] != 0)) {
+      reject(); return 0;
+    }
+    const unsigned count = kind == 0 ? (size - 8) / 2 : 1;
     const uint16_t div = size == 11 ? uint16_t(data[9]) | (uint16_t(data[10]) << 8) : 0;
-    const bool valid = (kind == 0 && size >= 7 && ((size - 5) & 1) == 0) ||
+    const bool valid = (kind == 0 && size <= 254 && ((size - 8) & 1) == 0) ||
         (kind == 1 && size == 11 && validRate(get32(data + 5), div)) ||
         (kind == 2 && size == 6 && data[5] <= 3);
     if (!valid || haveEnd) { reject(); return 0; }
@@ -307,7 +318,7 @@ size_t command(uint8_t opcode, const uint8_t* data, size_t size, uint8_t* respon
     }
     for (unsigned i = 0; i < count; ++i) {
       Event e = {position, 0, div, kind, 0};
-      if (kind == 0) { e.address = data[5 + 2 * i]; e.value = data[6 + 2 * i]; }
+      if (kind == 0) { e.address = data[8 + 2 * i]; e.value = data[9 + 2 * i]; }
       else e.value = kind == 1 ? get32(data + 5) : data[5];
       events[eventWrite] = e;
       eventWrite = (eventWrite + 1) % EventCapacity;
@@ -315,7 +326,7 @@ size_t command(uint8_t opcode, const uint8_t* data, size_t size, uint8_t* respon
     }
     haveEvent = true;
     lastEventPosition = position;
-  } else if (opcode == 0x5a) {
+  } else if (opcode == 0x12) {
     if (size != 6 || !validRate(get32(data), uint16_t(data[4]) | (uint16_t(data[5]) << 8))) {
       reject(); return 0;
     }

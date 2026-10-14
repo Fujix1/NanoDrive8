@@ -1,262 +1,266 @@
-# NDSIF v1 API リファレンス
+# NDSIF 汎用API仕様
 
-文書版: 0.36 / Draft
+文書版: 0.38 / Draft
 更新日: 2026-10-14
-対象: NanoDrive8、現行ファームウェア実装（FW 表示 `1.0b8`）
+対象: 音源レジスタ通信のホスト・受信機
+策定対象: 正式v1、未成立。wire版の候補値: `01`
 
-本書は実装済みの通信 API を記述する。外部シンセの接続・アイドル・切断・復旧手順は `NDSIF_HOST_GUIDE.md`、設計経緯と実機検証は `NDSIF.md` を参照する。文書版と wire 上のプロトコル版は別であり、現在のプロトコル版は `01`。
+本書は製品・MCU・クロック生成IC・USBドライバー・搭載スロットに依存しないv1草案を定める。音源書き込みの要求IDはVGM準拠とし、全レジスタ書き込みを無応答BURSTに統一する。b版のフレーム・ID・実装記録は [互換資料](NDSIF_legacy/README.md) に分離する。個別ファームウェア・codecの対応状況は、その実装の資料で示す。
 
-API は VGM パーサーに依存しない。ホストは任意の YM2151 レジスタ列と、連続状態を保った OKI ADPCM を送れる。VGM、MML、MIDI、PCM8 の解釈・音源合成はホストの仕事。ND8 はこれらのファイル・演奏イベントを直接受け付けない。
+## 1. フレーム
 
-## 1. 共通フレーム
-
-送受信とも同じ形式。整数はすべて little-endian。USB read/write の境界とフレーム境界は一致しない。
+送受信は双方向byteストリーム。整数はlittle-endian。トランスポートのread/write境界とフレーム境界は一致しない。
 
 ```text
 00 + COBS(raw) + 00
 
-raw = magic[2] + version[1] + opcode[1] + request_id[2]
-    + payload_length[2] + payload[payload_length] + crc16[2]
+raw = magic[2] + version[1] + message_type[1] + command_id[1]
+    + transaction_id[2] + payload_length[2] + payload + crc16[2]
 ```
 
 | raw offset | 型 | 内容 |
 | ---: | --- | --- |
 | 0 | 2 byte | ASCII `ND` = `4E 44` |
-| 2 | u8 | プロトコル版 `01` |
-| 3 | u8 | 要求 opcode、応答は要求 opcode OR `80` |
-| 4 | u16 | 要求番号。応答でそのまま返す |
-| 6 | u16 | ペイロード長、最大 256 byte |
-| 8 | byte 列 | ペイロード |
-| 8 + ペイロード長 | u16 | CRC-16/CCITT-FALSE |
+| 2 | u8 | wire版の候補値 `01` |
+| 3 | u8 | メッセージ種別、下表 |
+| 4 | u8 | 要求ID `command_id`、8bit全域を使用 |
+| 5 | u16 | 応答照合用の要求番号 `transaction_id` |
+| 7 | u16 | payload長、最大256 byte |
+| 9 | byte列 | payload |
+| 9 + payload長 | u16 | CRC-16/CCITT-FALSE |
 
-CRC は magic 先頭からペイロード末尾まで。poly=`1021`、init=`FFFF`、refin/refout=false、xorout=`0000`。チェック値 `123456789` → `29B1`。raw 最大 266 byte、COBS 部最大 268 byte、区切り込み最大 270 byte。
-
-不正 COBS、CRC、magic、版、長さは無応答で破棄。未完フレームは最後の byte から 500ms で期限切れとなり、次の `00` まで破棄する。連続する空の区切りは無視する。起動ログ・遅れた応答もあり得るため、ホストはフレーム検証と要求番号照合を行う。
-
-要求番号は照合用であり、重複排除・セッション識別・再送保証を提供しない。同じ要求を再送すると再実行され得る。応答付き要求はホスト側で同時に 1 件までとする。番号は u16 の範囲で周回できるが、未完了要求の番号を再利用しない。
-
-要求番号 `0001`、PING payload が ASCII `ND8` の送受信例（区切り込み、現行パーサーで照合済み）:
-
-```text
-要求: 00 06 4E 44 01 01 01 02 03 06 4E 44 38 33 96 00
-応答: 00 06 4E 44 01 81 01 02 04 01 06 4E 44 38 E4 56 00
-```
-
-## 2. 応答とエラー
-
-応答ペイロードの先頭は共通の status byte。
-
-| status | 意味 |
+| message_type | 意味 |
 | --- | --- |
-| `00` | ソフトウェア処理の完了。ハードウェア読戻しや音の再生完了を保証しない |
-| `01` | コマンドまたは引数を拒否。詳細なし |
+| `00` | 無応答要求。全レジスタ書き込みはこれを使う |
+| `01` | 応答を要求する制御要求。レジスタ書き込みには使用不可 |
+| `02` | 制御要求への応答 |
+| その他 | 未定義。破棄 |
 
-`56`～`5A` は引数が不正でも応答しない。`56` / `57` の拒否は通常無視され、ADPCM 診断へも記録されない。`58`～`5A` の引数・位置拒否は ADPCM fault にラッチされる。ただしフレーム自体が壊れて破棄された場合はコマンド処理に到達しない。
+応答は `message_type=02` とし、要求のcommand_id・transaction_idをそのまま返す。command_id OR `80` は使わない。`A0` / `A5` / `D0` などbit7が立つ音源要求IDも、message_typeで要求と応答を区別する。
 
-未知の要求 opcode（bit7=0）には status=`01` を返す。bit7=1 の受信フレームには応答しない。`5B` が非対応の旧 FW では拒否応答となり得るため、ADPCM 開始前に応答形を確認する。FW 文字列だけで機能を判定しない。
+CRCの対象はmagic先頭からpayload末尾まで。poly=`1021`、init=`FFFF`、refin/refout=false、xorout=`0000`、チェック値 `123456789` → `29B1`。raw最大267 byte、COBS部最大269 byte、区切り込み最大271 byte。
 
-ホストの制御応答タイムアウト初期値は 1 秒。PING / GET_INFO / AUDIO_STATUS は新しい要求番号で再試行できる。RESET / 書き込みの応答喪失時は、処理済みか不明なので演奏を維持したまま自動再送しない。復旧手順はホストガイドを参照する。
+不正COBS・CRC・magic・版・長さは無応答で破棄する。未完フレームは最後のbyteから500msで期限切れとなり、次の `00` まで破棄する。空の区切りは無視する。要求番号は重複排除や再送保証を提供しない。同じ書き込みを再送すると再実行され得る。
 
-## 3. API 一覧
+NDSIFは現在b版であり、本書は正式v1の策定草案。b版もwire版 `01` を使用するが、本草案との互換性を意味しない。wire版の値だけでは両形式を識別できないため、接続設定等でプロファイルを明示する。相手の形式を確認せず書き込み要求を送り、結果から自動判定する手順は定義しない。
 
-ID と payload の byte 値は 16 進表記。
+## 2. 制御要求とレジスタ要求
 
-| 要求 | 名称 | 要求 payload 長 | 応答 |
-| --- | --- | ---: | --- |
-| `00` | RESET | 0 | `80`: status 1 byte |
-| `01` | PING | 0～32 | `81`: status + 同じ byte 列 |
-| `02` | GET_INFO | 0 | `82`: status + 本体名・FW 文字列 |
-| `03` | SET_OUTPUT_VOLUME | 1 | `83`: status 1 byte |
-| `54` | WRITE_YM2151 | 2～256、偶数 | `D4`: status 1 byte |
-| `56` | WRITE_YM2151_BURST | 2～256、偶数 | なし |
-| `57` | SET_CHIP_CLOCK | 5 | なし |
-| `58` | AUDIO_DATA | 5～256 | なし |
-| `59` | AUDIO_EVENT | kind 別、下記参照 | なし |
-| `5A` | AUDIO_START | 6 | なし |
-| `5B` | AUDIO_STATUS | 0 | `DB`: status + u32 × 10 |
+`00`～`2F` はNDSIFの制御・ストリーム用領域、`30`～`FF` はVGM音源要求のための領域とする。VGMの同じ番号が存在しても、待ち・ファイル終端・データブロック等は音源レジスタ要求として定義しない。
 
-## 4. RESET (`00`)
+| ID（hex） | 名称 | message_type | payload |
+| --- | --- | --- | --- |
+| `00` | RESET | `01` | 空 |
+| `01` | PING | `01` | 0～32 byte |
+| `02` | GET_INFO | `01` | 空 |
+| `03` | SET_OUTPUT_VOLUME、任意機能 | `00` / `01` | attenuation:u8 |
+| `04` | SET_CHIP_CLOCK | `00` / `01` | write_id:u8 + instance:u8 + hz:u32 |
+| `05` | GET_CAPABILITIES | `01` | offset:u16 |
+| `10` | AUDIO_DATA、任意プロファイル | `00` | 第8節 |
+| `11` | AUDIO_EVENT、任意プロファイル | `00` | 第8節 |
+| `12` | AUDIO_START、任意プロファイル | `00` | 第8節 |
+| `13` | AUDIO_STATUS、任意プロファイル | `01` | 第8節 |
+| VGMの音源要求ID | WRITE_* | `00`のみ | instance:u8 + page:u8 + register_pairs |
 
-要求は空。正常な完了応答 payload は `00`。
+応答付き制御のpayload先頭はstatus:u8。`00` はソフトウェア処理完了、`01` は要求・引数・機能を拒否したことを示す。拒否応答はstatusだけを返す。完了は物理I/Oの読戻しや発音完了を保証しない。
 
-メイン出力ミュート → ADPCM 供給停止・キュー／診断初期化 → 両チップの物理リセット・ソフトウェア状態初期化 → OKI STOP → Visual 表示履歴の初期化・表示中なら初期描画完了 → OKI を符号化無音で駆動・PAN ミュート解除 → メインミュート解除・250ms 安定待ち → 応答、の順に処理する。FM の音色設定・発音状態も失われる。チャンネルマスクは既存の本体操作状態を維持する。
+**レジスタ書き込みにはstatus・ACK・完了応答を返さない。** 長さ・個体・ページ・対象が不正または未対応でも、書き込みへの応答は生成しない。message_type=`01` を付けたレジスタ要求も、書き込み・応答を行わず破棄する。受理確認が必要なホストは対応情報を先に調べ、初期化列の後続PINGや、対応する診断を利用する。PING成功は不正な先行書き込みが成功したという意味ではない。
 
-無音準備中はホストの DATA を消費せず、AUDIO_STATUS の accepted / played / pending は 0、running / ended / fault は false のまま。RESET 後も物理 OKI は `80` の無音ペアを駆動し、AUDIO_START で曲データへ切り替える。ミュート解除・安定待ち中に曲の先頭が消費されることを防ぐ。準備完了後の AUDIO_START は物理 PLAY を再発行しない。
+無応答の未定義要求は破棄する。応答付きの制御領域の未定義要求にはstatus=`01` を返せる。応答フレームへ応答しない。ホストは制御応答をopcodeのbit7ではなく、種別・ID・要求番号で照合する。
 
-Visual 初期化では、保持音程・鍵盤の差分キャッシュ・レベル・ピークホールド・PAN 描画キャッシュをクリアする。表示中なら画面タスクで初期描画し、LCD 転送完了後に RESET の完了応答を返す。設定画面などを表示中は画面を切り替えず、非表示の Visual 履歴だけを初期化する。通常の演奏データ受信や PAN イベント適用では描画完了を待たない。
+## 3. VGM準拠の音源要求ID
 
-RESET は ESP32 の再起動ではない。正常な RESET についてハードウェア失敗の判定・応答は行わない。不正な非空 payload は status=`01`。入力クロックは現在値を維持し、OKI 分周は 512 へ戻る。ホストは復旧後に使用クロック・音色を再設定する。
+以下は [VGM v1.71仕様の音源コマンドとdual-chip規則](https://github.com/vgmrips/vgmplay-legacy/blob/master/VGMPlay/vgmspec171.txt) に基づく。要求IDは16進、instanceとpageは数値。
 
-ADPCM の位置、END、故障、キュー、統計をすべて初期化する。PC の出力エンコーダも RESET 完了後に新しい初期状態へ戻す。現在の Delphi codec は signal=-2、step index=0 を初期状態とする。具体的な codec は `serialtestnd8/NDSIFAudioVGM.pas` の `TOKICodec`、既存 ND8 側は `src/okim6258.cpp` を参照。RESET は前に受信した要求の後に実行される。緊急停止にも使用できるが、通信・受信処理が正常であることが前提。
+| 要求ID | 名称・論理音源 | instance | page |
+| --- | --- | --- | --- |
+| `51` | WRITE_YM2413 / OPLL | 対応する個体 | 0 |
+| `54` | WRITE_YM2151 / OPM | 対応する個体 | 0 |
+| `55` | WRITE_YM2203 / OPN | 対応する個体 | 0 |
+| `A5` | WRITE_YM2203_SECOND / OPNの2個目、VGM別ID | 1のみ | 0 |
+| `5A` | WRITE_YM3812 / OPL2 | 対応する個体 | 0 |
+| `5B` | WRITE_YM3526 / OPL1 | 対応する個体 | 0 |
+| `5E` | WRITE_YMF262_PAGE0 / OPL3 | 対応する個体 | 0 |
+| `5F` | WRITE_YMF262_PAGE1 / OPL3 | 対応する個体 | 1 |
+| `A0` | WRITE_AY8910 / AY-3-8910 | 0=1個目、1=2個目等 | 0 |
+| `D0` | WRITE_YMF278B、将来の対応対象 | 対応する個体 | 0・1・2 |
+| `B7` | WRITE_OKIM6258、任意のレジスタ／ストリームプロファイル | 対応する個体 | 0 |
 
-## 5. PING (`01`)
+基本IDは論理音源を選び、明示instanceで個体を選ぶ。例: `55` / instance=1 と `A5` / instance=1 は同じYM2203の2個目を指す。VGMの2個目専用の別IDを扱う受信機は、そのIDとinstance=1の一致を要求する。`A1` / `A4` / `AA` / `AB` / `AE` / `AF` もそれぞれ元のYM系音源の2個目として予約する。実際に使えるID・個体・ページは第7節で確認する。
 
-0～32 byte を送信し、成功時は status=`00` と同じ byte 列が返る。空 payload も可。接続確認では短い nonce を使い、opcode・要求番号・echo を検証する。
+AYの2個目は `A0` / instance=1 で指定し、VGMの個体選択bit7をaddressへ含めない。VGMの `D0` 等の個体選択bitもpageへ含めない。取り込み側がそれぞれinstanceへ分離する。
 
-同じ送信列で先行したコマンドの処理後に応答するため、初期化の完了待ちにも使える。ただし先行した AUDIO_DATA がチップに再生済みであることや、未来の AUDIO_EVENT が適用済みであることは示さない。PING は PCM 供給・無音生成・本体側の自動音止めタイマーにはならない。
+`56` はVGMのYM2608ページ0、`57` はYM2608ページ1として予約する。この草案の追加対応対象には含めず、YM2151のBURST・クロック設定・その他の制御へ転用しない。`58` / `59` もVGMのYM2610の用途へ予約する。b版の同じ数値とは別の意味。
 
-## 6. GET_INFO (`02`)
+次の音源も将来の対応用に予約し、別音源・制御へ転用しない。予約は実装済み・使用可能を意味しない。
 
-要求は空。成功応答:
+| 予約ID | 論理音源・用途 | 個体・ページ |
+| --- | --- | --- |
+| `52` / `53` | YM2612 / YM3438、ページ0 / 1 | 基本ID、明示instance。ページはそれぞれ0 / 1 |
+| `A2` / `A3` | YM2612 / YM3438の2個目、ページ0 / 1 | instance=1。ページはそれぞれ0 / 1 |
+| `50` | SN76489の1個目の基本ID | instance=0。将来の明示instance形式は別途策定 |
+| `30` | SN76489の2個目、VGM別ID | instance=1 |
 
-```text
-status:u8 + model_length:u8 + model[model_length]
-          + firmware_length:u8 + firmware[firmware_length]
-```
+YM2612とYM3438はVGMと同じ要求IDを共有し、別音源IDを新設しない。品種の指定・対応情報は今後策定し、クロックHzに品種フラグを混ぜない。SN76489はaddress/value組ではなくラッチ／データbyteを書き込む音源のため、予約段階では第4節のレジスタpayloadを適用せず、byte列のBURST形式を今後策定する。その場合も書き込みのstatus・ACKは返さない。
 
-文字列は UTF-8、NUL 終端なし。本体名は `NanoDrive 8`（11 byte）。FW は `ND_FIRMWARE_VERSION`（現在 `1.0b8`）、最大 63 byte。各長さと応答末尾の一致を確認する。
+## 4. レジスタ書き込み — 全てBURST
 
-現在の成功応答 payload:
-
-```text
-00 0B 4E 61 6E 6F 44 72 69 76 65 20 38 05 31 2E 30 62 38
-```
-
-機能一覧、バッファ容量、実適用クロック、セッション ID はこの応答に含まれない。
-
-## 7. WRITE_YM2151 (`54`) / WRITE_YM2151_BURST (`56`)
-
-```text
-address:u8 + value:u8  // 1～128 組を列挙
-```
-
-正常フレームの全組を受信順に即時書き込む。本体の PAN 反転設定・チャンネルマスクも適用される。`54` は全組の書き込み処理後に status=`00` を返す。`56` は同じ処理で応答なし。リアルタイム演奏の通常送信には `56` を用いる。
-
-ペイロード例 `20 C7 08 78` は、レジスタ `20` へ `C7`、続いて `08` へ `78`。API は音色・NoteOn の高位命令を解釈せず、レジスタ列をそのまま扱う。
-
-将来時刻の指定はない。ADPCM と同じ時間軸に合わせる FM 書き込みは `59` kind=0 を使う。即時 `56` と未来の kind=0 を混在させると、未来イベントが後から即時変更を上書きし得る。
-
-## 8. SET_CHIP_CLOCK (`57`)
+音源の要求IDをフレームのcommand_idに置き、payloadは次の共通形式にする。
 
 ```text
-chip_id:u8 + hz:u32
+instance:u8 + page:u8 + (address:u8 + value:u8)[1..127]
 ```
 
-| chip_id | 対象 | 受け付ける指定 |
+payload長は4～256 byteの偶数。一つのフレームは一つの音源・個体・ページを対象にする。組の並び順を維持して処理する。別ページ・別個体は別フレームへ分ける。
+
+pageはu8で0～255を表現する。単一ページの音源は0、2ページの音源は0・1、3ページの音源は0・1・2を区別する。fieldの表現範囲と、その音源が持つ有効ページは別。受信機は未対応ページを無音源のページ0へ読み替えない。
+
+アドレスページは音源固有の空間で、ページごとの用途を規格共通の固定機能にしない。YMF262は `5E` とpage=0、`5F` とpage=1を一致させる。YMF278B等の明示ページ型IDは一つのIDのpayloadでページ0・1・2を選べる。AYのaddress範囲は `00`～`0F`。
+
+YMF278Bの3ページは、[ymfmの音源実装](https://github.com/aaronsgiles/ymfm/blob/main/src/ymfm_opl.cpp)でも通常FM・上位FM・PCMのアドレス空間として区別される。NDSIFのpageはこの種の違いを保持するフィールドであり、YMF262の2バンクに制限しない。
+
+対象・instance・page・長さ・音源のアドレス範囲をフレーム全体で検証してから書き込む。引数不正による部分書き込みを行わない。バーストは複数フレームの原子性、I/Oの成功、重複排除、再送を保証しない。単独の1組もBURSTと同じ無応答動作。
+
+| 操作 | command_id | payload（hex） |
+| --- | --- | --- |
+| YM2151 register `20` ← `C7`、続けて `08` ← `78` | `54` | `00 00 20 C7 08 78` |
+| YM2203の1個目、register `28` ← `F0` | `55` | `00 00 28 F0` |
+| YM2203の2個目、register `28` ← `F0` | `A5` | `01 00 28 F0` |
+| YM2413 register `20` ← `15` | `51` | `00 00 20 15` |
+| OPL1 register `B0` ← `20` | `5B` | `00 00 B0 20` |
+| OPL2 register `B0` ← `20` | `5A` | `00 00 B0 20` |
+| OPL3 page1のregister `05` ← `01` | `5F` | `00 01 05 01` |
+| AYの1個目、register `08` ← `0F` | `A0` | `00 00 08 0F` |
+| AYの2個目、register `08` ← `0F` | `A0` | `01 00 08 0F` |
+| ページ2型の例: YMF278B page2のregister `08` ← `01` | `D0` | `00 02 08 01` |
+
+`WRITE_YM2151_BURST` や汎用の応答付き `WRITE_REGISTERS` は定義しない。音源ごとのWRITE要求が、そのままBURST。
+
+## 5. 初期化・情報・同期
+
+RESET (`00`) は受信機が管理する音源・ストリームの状態を初期化する。ソフトウェアの位置・キュー・faultをクリアし、プロファイルの初期状態へ揃える。物理リセット、ミュート、準備用無音、安定待ちの具体的な方式・時間は受信機の実装事項。曲データを消費する前に必要な準備を終え、完了後にstatusを返す。
+
+PING (`01`) は0～32 byteを受け取り、status=`00`と同じbyte列を返す。先行する即時要求を受信順に処理した後に応答するが、書き込みの個別成功や予約済みイベントの実行完了を示さない。
+
+GET_INFO (`02`) の成功payloadは `status:u8 + name_length:u8 + name[bytes] + firmware_length:u8 + firmware[bytes]`。文字列はUTF-8、NULなし、全体は256 byte以内。製品名・FWの特定の文字列を必須にせず、機能対応の判定は第7節を使う。
+
+SET_OUTPUT_VOLUME (`03`) は任意機能。attenuationは0～96、0=減衰なし、1～95=dB指定、96=ミュート。受信機が最終出力へ適用し、対応しない場合は応答付き要求で拒否する。物理的な音量素子・チャンネル数・制御バスは固定しない。
+
+## 6. SET_CHIP_CLOCK (`04`)
+
+```text
+write_id:u8 + instance:u8 + hz:u32
+```
+
+write_idはVGM準拠の論理音源要求ID、hzはその音源本来の入力クロックHz。個体を明示し、VGMヘッダーのdual-chip等のフラグは含めない。ページごとの別IDは同じ音源・個体のクロックを指す。例えば `5E` / `5F` は同じYMF262のクロックで、ページ別のクロックではない。
+
+受信側が搭載構成・互換音源・分周・クロック生成手段に応じて正規化する。ホストは代替チップのIDや変換済みHzへ置き換えない。
+
+| 論理音源 → 物理音源 | 基本倍率・モード |
+| --- | --- |
+| 同種の音源 → 同種の音源 | 1倍、受信側で実現可能な値へ正規化 |
+| OPL1 → OPL2 | 1倍、対応可能な機能範囲 |
+| OPL1 / OPL2 → OPL3 | 4倍、OPL互換モード |
+| OPL3 → OPL3 | 1倍、OPL3本来のHz |
+| AY → YM2203の標準SSG構成 | 2倍 |
+
+OPL1の3,579,545Hzを物理OPL3で鳴らす場合、ホストはwrite_id=`5B` / hz=3,579,545を送り、受信側が14,318,180Hzへ正規化する。OPL3本来の指定はwrite_id=`5E` / hz=14,318,180とし、再び4倍しない。AYの2MHzを標準のYM2203 SSG部へ割り当てる場合は物理4MHz。
+
+未対応ID・個体、Hz=0、互換割り当てなし、実現できない設定、倍率計算のu32オーバーフローは適用しない。要求がmessage_type=`01`なら拒否を返し、`00`なら無応答。任意Hzの厳密な実現やクロック読戻しは保証しない。共有する物理音源・クロックには最後の設定が効くため、受信機は共有の制約を明示する。
+
+## 7. GET_CAPABILITIES (`05`)（問い合わせ形式の草案）
+
+要求payloadはoffset:u16。最初は0。成功応答は次の形式。
+
+```text
+status:u8 + max_payload:u16 + data_capacity:u32 + event_capacity:u16
+ + control_features:u16 + next_offset:u16 + entry_count:u8
+ + entries[entry_count]
+
+entry = write_id:u8 + instance:u8 + page:u8 + features:u8
+```
+
+固定部分14 byte、1entryは4 byte、256 byte上限では最大60entry。next_offset=`FFFF` は一覧の終端、それ以外は次に問い合わせるoffset。受信機は同じ対応構成の一貫した一覧を返す。ホストは終端まで取得し、循環・重複・不正長を拒否する。対応構成が変わった場合は取得をやり直す。
+
+| features bit | 意味 |
+| ---: | --- |
+| 0 | 即時レジスタBURST |
+| 1 | 位置付きレジスタイベント |
+| 2 | 論理クロック設定 |
+| 3 | この音源・個体の任意ストリームプロファイル |
+
+control_features bit0はSET_OUTPUT_VOLUMEの対応を示す。他のbitは予約。max_payloadはこの版では256以下。data_capacityはストリームの未供給byte容量、event_capacityは未実行のレジスタ組等の件数。対応しない機能の容量は0。複数ストリームの個別容量が異なる場合の詳細通知は今後の拡張事項で、共通値は全対応ストリームで使用できる保守的な上限とする。
+
+ページ0・1・2を持つ音源は、同じwrite_id・instanceについて各pageを別entryで示す。別IDにも対応する場合はその別IDも示す。この一覧は物理スロットを固定しない。対応周波数・許容近似・共有関係の詳細な表現形式は別途定義する。
+
+## 8. 任意ストリーム — MSM6258互換ADPCMプロファイル
+
+以下は、レジスタ通信とは分離した任意プロファイル。全受信機にMSM6258・ADPCM・データ要求割り込みを要求するものではない。GET_CAPABILITIESで対応を確認して使う。別codec・一般PCMの形式はこの草案では定義しない。
+
+stream_idにはVGMのMSM6258 ID=`B7`、instanceには個体番号を使う。各ストリームは独立した位置・codec state・faultを持つ。positionはRESETからのADPCM byte位置u32。1 byteはlow nibble→high nibbleの2samples。自然周回を認めない。
+
+### 8.1. AUDIO_DATA (`10`)
+
+```text
+stream_id:u8 + instance:u8 + position:u32 + adpcm[1..250]
+```
+
+payloadは7～256 byte。positionは受信機のacceptedと完全一致させる。重複・欠落・逆順・END後・位置オーバーフローはfault。容量を超えるチャンクは部分受理せず拒否する。応答は返さず、状態はAUDIO_STATUSで確認する。
+
+ホストは出力エンコーダの予測値・stepをチャンク・ノート・無音をまたいで継続する。無音も同じエンコーダで生成する。送信完了は受理・供給・実変換の完了と区別する。同じ音源への直接データレジスタ書き込みを、連続ストリームへ混ぜない。
+
+### 8.2. AUDIO_EVENT (`11`)
+
+```text
+stream_id:u8 + instance:u8 + position:u32 + kind:u8 + kind_data
+```
+
+| kind | kind_data | 全payload長 |
+| ---: | --- | ---: |
+| 0 | write_id:u8 + target_instance:u8 + page:u8 + register_pairs[1..123] | 12～256、偶数 |
+| 1 | hz:u32 + divider:u16、このストリームのクロック・分周 | 13 |
+| 2 | pan:u8、このストリームの出力 | 8 |
+| 3 | zero_pair:u8、END | 8 |
+
+登録は同値を許すposition昇順、同値では受信順を維持する。レジスタ1組をキューの1件と数える。引数や容量を先に検証し、イベントの部分登録をしない。kind=0は全音源について論理要求ID・個体・ページを保持し、書き込み自体のACKやstatusを返さない。対象や位置の拒否はストリームfaultとして状態問い合わせに記録する。
+
+kind=1のHzは4,000,000 / 8,000,000、dividerは512 / 768 / 1024。ホストのsample rate・リサンプラ・byte時間も同じ境界で変更する。kind=2は0=左右、1=左、2=右、3=オフ。一般音源のクロック予約はここへ流用せず、別仕様とする。
+
+ENDは最後のDATA後、position=acceptedに置く。ホストは末尾をゼロPCMへ収束させ、エンコーダ状態に合う `80` / `08` を指定する。受信機は終了後もstateに合うゼロペアを反復できる。以後のDATA/EVENT・同一ストリームの再STARTは禁止し、再開はRESET後に行う。通常の離鍵・待機にENDを使わない。
+
+### 8.3. AUDIO_START (`12`)
+
+```text
+stream_id:u8 + instance:u8 + initial_hz:u32 + divider:u16
+```
+
+payloadは8 byte。faultなし、未開始、accepted>0、played=0で開始する。初期Hz・dividerはkind=1と同じ。無応答で、開始成功はSTATUSのrunningで確認する。
+
+受信機は必要な初期化・デコード開始・安定待ちをミュート中に終え、音楽データを消費する前に出力を準備する。具体的な待ち時間やI/O順序は受信機に依存し、規格で特定の250ms等へ固定しない。
+
+### 8.4. AUDIO_STATUS (`13`)
+
+要求payloadは `stream_id:u8 + instance:u8`。成功応答はstatus=`00` + u32×10で41 byte。
+
+| u32の順序 | 名称 | 意味 |
 | ---: | --- | --- |
-| 5 | YM2151 | 現行の `vgm.normalizeFreq()` で正規化 |
-| 14 | OKIM6258 | 4,000,000 / 8,000,000 Hz |
+| 0 | accepted | 受理済み末尾位置 |
+| 1 | played | 音源へ供給済み末尾位置 |
+| 2 | pending | accepted−played |
+| 3 | underflows | データ不足回数 |
+| 4 | overflows | データ／イベント容量超過回数 |
+| 5 | rejected | ストリーム引数・位置の拒否回数 |
+| 6 | max_pending | RESET後の最大pending |
+| 7 | flags | 下表 |
+| 8 | late_events | 適用位置を過ぎて処理したイベント件数 |
+| 9 | max_event_lag | 最大イベント遅延、byte単位 |
 
-YM2151 は 3,375,000 / 3,500,000 / 4,000,000 Hz と 3,579,000～3,580,000 Hz に対応。その他の非ゼロ値は既存処理の 3.579MHz へ正規化するため、指定 Hz をそのまま実現する API とは扱わない。全 chip ID の定義は `NDSIF.md` 第 4.2.1 節を参照。
+flags bit0=running、bit1=ended、bit2=fault。原因bit3=transport reset、4=receive overflow、5=explicit discard、6=data underflow、7=data overflow、8=event overflow、9=invalid argument/position。未知の上位bitは保持し、faultはbit2で判断する。正常RESET後は全項目0。late_eventsだけではfaultとしない。
 
-例: YM2151 4MHz は `05 00 09 3D 00`、OKI 8MHz は `0E 00 12 7A 00`。対応スロットがあり、正規化後の値が現在と異なる場合だけ SI5351 とフッタを更新する。
+playedは供給済み数であり、DACの変換完了を保証しない。容量・実適用遅延・通信断時の音止めは受信機の実装と運用条件で確認する。プロファイルがfaultになったらデータを補って再開せず、ホストの古い生成・予約を止めてRESETから初期化する。
 
-常に無応答。不正長、Hz=0、非対応チップ／OKI 周波数、対象スロット不在は操作しない。実クロックの読戻し・成功通知はない。演奏中の OKI 周波数変更は `59` kind=1 を使う。YM2151 の周波数変更には位置指定 API がなく、`57` は即時制御。
+## 9. 予約と移行
 
-## 8.1. SET_OUTPUT_VOLUME (`03`)
+VGM要求ID表の未対応音源は、そのVGM用途のまま予約する。任意の制御や別音源へ番号を再利用しない。16bitアドレス・16bit値・メモリー転送等は別のレジスタプロファイルとして今後定義し、8bit形式へ無理に詰め込まない。
 
-```text
-attenuation:u8  // 0～96、1 byte
-```
-
-NJU72342 の最終出力 ch3/ch4 を同じ減衰値へ即時設定する。0 は減衰なし、1～95 は1dB刻み、96 はミュート。入力ゲイン、OKI PAN 用 ch1/ch2、チャンネルマスクは変更しない。
-
-処理後の応答は `83` / payload=`00`。長さが1 byte以外、値が97～255の場合は設定を変更せず payload=`01` を返す。応答はソフトウェア処理完了で、I²C ACKや実出力の読戻し確認ではない。
-
-例: 12dB減衰は payload=`0C`、ミュートは `60`。値は RESET 中の一時ミュートをまたいで保持する。シリアルモード起動時は0、永続保存はしない。現在値取得・時刻指定・ADPCM byte位置指定はない。非対応の旧ファームウェアは status=`01` を返すため、FW文字列だけで対応を判定しない。
-
-## 9. AUDIO_DATA (`58`)
-
-```text
-position:u32 + adpcm[1..252]
-```
-
-位置は RESET からの ADPCM **byte** 位置。sample / nibble / tick ではない。1 byte は下位 nibble → 上位 nibble、2 samples。最初は position=0、次は前の position + byte 数。
-
-position は ND8 の受理済み末尾 `accepted` と完全一致する必要がある。重複、欠落、逆順、u32 末尾のオーバーフロー、END 後の追加を拒否し、fault にする。4096 byte リングに収まらないチャンクは全体を拒否し、overflow と fault を記録する。チャンクの一部だけを受理しない。
-
-出力エンコーダの予測値・step をチャンク間で継続する。無音も同じエンコーダで生成する。ND8 は sample の変換・PCM8 合成・再エンコードをしない。送信完了は受理／再生完了ではない。受理・再生位置は `5B` で確認する。
-
-## 10. AUDIO_EVENT (`59`)
-
-```text
-position:u32 + kind:u8 + kind_data
-```
-
-通常イベントは同値を許す昇順で送る。受信タスクは供給済み byte 位置 `played` が position 以上になると受信順に処理する。位置は byte 境界の指定だが、タスク周期・I²C・FM 待ち・描画により遅れ得る。厳密な境界実行の保証はない。すでに過ぎた位置でも昇順条件を満たせば受理され、遅延として処理される。
-
-イベントを対応 DATA より先に送り、消費位置より余裕を持って先行させる。イベントと PCM は別キュー。1024 件の上限は、FM レジスタの **1 組を 1 件** と数える。空きイベント数の問い合わせは現在ない。
-
-| kind | kind_data | 全 payload 長 | 動作 |
-| ---: | --- | ---: | --- |
-| 0 | address:u8 + value:u8、1～125 組 | 7～255、奇数 | YM2151 書き込み |
-| 1 | hz:u32 + divider:u16 | 11 | OKI 周波数・分周率変更 |
-| 2 | pan:u8 | 6 | OKI PAN |
-| 3 | zero_pair:u8 | 6 | 連続ストリームの終了位置設定 |
-
-kind=1 の Hz は 4,000,000 / 8,000,000、divider は 512 / 768 / 1024。周波数 → 分周率の順に変更。ホスト側の sample rate・byte 時間・リサンプラも同じ境界で変更する。制御の実適用遅れは現在未補正。
-
-kind=2 は 0=左右オン、1=左オン、2=右オン、3=左右オフ。Visual Window の ADPCM 先頭トラックの PAN は、このイベントが指定 byte 位置で適用された後に更新する。本体の PAN 反転設定を反映する。PAN をオフにしても ADPCM の供給は必要。PCM8 を PC で合成した場合も、OKI 全体でこの一つの PAN を扱う。
-
-kind=3（END）は特殊扱い。position はその時点の `accepted` と完全一致、通常イベントの最後の位置以上でなければならない。ホストは末尾をゼロ PCM へ収束させ、エンコーダ状態に合う `80` または `08` を渡す。ND8 は値を検証するが、本当にゼロへ収束済みかを検証しない。
-
-END は最後の DATA 後に送る。以後の `58` / `59` は禁止。末尾到達後も実チップは PLAY を保ち、zero_pair を繰り返す。再開には RESET が必要。アイドル入り・一つのノートの終了には END を使わない。`56` による即時 FM 書き込みは END によって禁止されない。
-
-不正 kind / 長さ / 値 / 位置、END 後の追加は fault。イベント容量超過は overflow と fault。すでに fault の場合、追加 `58`～`5A` は処理されない。
-
-## 11. AUDIO_START (`5A`)
-
-```text
-initial_oki_hz:u32 + divider:u16
-```
-
-例: 8MHz/512 は `00 12 7A 00 00 02`。4MHz/768 は `00 09 3D 00 00 03`。
-
-有効 Hz・divider は kind=1 と同じ。開始条件は fault なし、未開始、`accepted > 0`、`played = 0`。開始は各 RESET 後に一度だけ。無応答で、拒否は fault。開始成功は `5B` の flags bit0 で確認できる。
-
-PAN ミュート → 初期クロック・分周設定 → 供給有効化 → OKI PLAY → 260µs 待機 → PAN を左右オンへ設定 → ミュート解除。初期 PAN を左右オン以外にする場合は、開始後の時間軸に PAN イベントを置く。先頭 5.12ms のゼロ PCM プリロールは現在の Delphi で検証された開始方式。ホストは開始時の settling に発音が重ならないようにする。
-
-この API は両チップ RESET を実行しない。RESET と PC エンコーダ初期化は先に完了させる。開始後は入力が無音でも連続 DATA を供給する。START の欠落で未開始のまま受理だけが進む場合も、継続すると overflow し得るため開始状態を確認する。
-
-## 12. AUDIO_STATUS (`5B`)
-
-要求は空。正常な応答 opcode は `DB`、payload は 41 byte（status=`00` + 40 byte）。下表の offset は status の次から、つまり診断部分の相対 offset。
-
-| offset | u32 名称 | 意味 |
-| ---: | --- | --- |
-| 0 | accepted | 受理済み ADPCM 末尾位置 |
-| 4 | played | キューからチップへ供給済みの末尾位置 |
-| 8 | pending | accepted − played、未供給 byte 数 |
-| 12 | underflows | PCM 不足回数 |
-| 16 | overflows | PCM / イベントキューあふれ回数。USB RX あふれとは別 |
-| 20 | rejected | 引数・位置の拒否回数 |
-| 24 | max_pending | RESET 後の最大 pending byte 数 |
-| 28 | flags | 下表 |
-| 32 | late_events | 指定位置を過ぎて処理した内部イベント件数 |
-| 36 | max_event_lag | 最大イベント遅延、ADPCM byte 単位 |
-
-played は供給数であり、DAC が最後の 2 nibble を変換済みであることを厳密に示さない。END 到達判定には最後の DATA の次の MCK が必要。受理・供給・flags は同じロックで読むが、遅延統計を含む全項目の完全同時刻スナップショットではない。
-
-| flags bit | mask（hex） | 意味 |
-| ---: | --- | --- |
-| 0 | `001` | running: START 済み。END 後も 1 |
-| 1 | `002` | ended: 正常末尾到達 |
-| 2 | `004` | fault: 故障ラッチ |
-| 3 | `008` | USB 実バスリセット |
-| 4 | `010` | SerialMan 受信リングあふれ |
-| 5 | `020` | 明示的受信破棄 |
-| 6 | `040` | PCM 不足 |
-| 7 | `080` | PCM キューあふれ |
-| 8 | `100` | イベントキューあふれ |
-| 9 | `200` | 引数・位置拒否 |
-
-理由は OR で重なる。未知の上位 bit は将来拡張として保持し、fault bit2 で故障を判定する。旧 FW の flags=`5` は理由なしの故障であり、個別原因は不明。正常な実行中は flags=`1`、正常 END 後は `3`、RESET 後は全項目 0。
-
-`late_events > 0` だけでは fault ではない。供給 fault は OKI の PAN ミュートをタスク側で行うが、FM の自動停止は行わない。正常化には両チップ RESET とホスト状態再構築が必要。
-
-## 13. 現行 API の範囲
-
-HELLO / SESSION / KEEPALIVE / MIDI / NoteOn / NoteOff / PCM データ送信 / ボリューム / 一般的な MUTE / PAUSE / RESUME / キュー取消 / 個別チップ RESET は未実装。接続・切断専用の wire メッセージもない。PING は本体側のセッションを作らない。
-
-イベント専用フレームの欠落をすべて検出する連番はない。CRC 不正で破棄された FM 即時書き込みや PAN 変更が、診断に現れない場合がある。切断・アプリ異常終了で FM が鳴り続ける可能性があり、自動キーオフ／通信途絶 watchdog は未実装。
-
-ADPCM position は u32 の自然周回を認めない。最大レートで約 152.7 時間の連続セッションが上限。到達前に計画的な RESET・再初期化を行う。現在のキュー容量は PCM 4096 byte、イベント 1024 件、USB RX と SerialMan リングは各 8192 byte。これらは実装定数であり、能力問い合わせによる通知ではない。
-
-## 14. 実装参照
-
-- `lib/ndsif/ndsif.h` / `lib/ndsif/ndsif.cpp`: COBS、CRC、即時 API、応答。
-- `src/serialman.cpp`: USB 受信、RESET、クロック設定、処理順。
-- `include/serialaudio.h` / `src/serialaudio.cpp`: ADPCM、イベント、診断、fault。
-- `serialtestnd8/NDSIFCodec.pas`: PC フレーム処理。
-- `serialtestnd8/NDSIFSerialLink.pas`: 現行の同期制御要求。演奏中の非同期監視実装では待機方式を変更する必要がある。
-- `serialtestnd8/NDSIFAudioVGM.pas`: 連続 ADPCM の codec と VGM 入力アダプタ。
+b版の `54` は応答付き、`56` はYM2151バースト、`57`～`5B` は制御・ADPCMの用途だった。正式v1草案では `54` は無応答YM2151、`56` / `57` はYM2608へ予約、`5A` / `5B` はOPL2 / OPL1の無応答書き込み。これらは正式v1の策定に伴う変更案であり、成立済みのv1を改訂するものではない。個別実装の移行は旧形式との非互換を明示して行う。

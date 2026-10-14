@@ -37,6 +37,7 @@ Thumbs.db
 /py/
 /testfiles/
 /tmp/
+/tests/
 
 # Audio files and conversion intermediates
 *.mdx

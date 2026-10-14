@@ -64,7 +64,16 @@ void setChipClockImpl(uint8_t chipID, uint32_t hz, bool drawFooter) {
   if (drawFooter) serialModeUpdateFooter();
   else audioFooterPending = true;
 }
-void setChipClock(uint8_t chipID, uint32_t hz) { setChipClockImpl(chipID, hz, true); }
+bool setChipClock(uint8_t writeID, uint8_t instance, uint32_t hz) {
+  if (instance != 0 || hz == 0) return false;
+  const t_chip chip = writeID == 0x54 ? CHIP_YM2151 :
+      writeID == 0xb7 ? CHIP_OKIM6258 : CHIP_NONE;
+  if (chip == CHIP_NONE || ND::clockSlot[chip] >= ND::freq.size()) return false;
+  if (chip == CHIP_OKIM6258 && hz != 4000000 && hz != 8000000) return false;
+  if (chip == CHIP_YM2151 && vgm.normalizeFreq(hz, chip) == SI5351_UNDEFINED) return false;
+  setChipClockImpl(chip, hz, true);
+  return true;
+}
 void setOkiClock(uint32_t hz) { setChipClockImpl(CHIP_OKIM6258, hz, false); }
 }  // namespace
 

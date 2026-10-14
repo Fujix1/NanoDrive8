@@ -72,90 +72,103 @@ void Protocol::feed(uint8_t byte, uint32_t now) {
 }
 
 void Protocol::dispatch(size_t size) {
-  if (size < 10 || raw_[0] != 'N' || raw_[1] != 'D' || raw_[2] != 1) return;
-  const size_t length = raw_[6] | (static_cast<size_t>(raw_[7]) << 8);
-  if (length > MAX_PAYLOAD || size != 10 + length) return;
+  if (size < 11 || raw_[0] != 'N' || raw_[1] != 'D' || raw_[2] != 1) return;
+  const size_t length = raw_[7] | (static_cast<size_t>(raw_[8]) << 8);
+  if (length > MAX_PAYLOAD || size != 11 + length) return;
   const uint16_t checksum = raw_[size - 2] | (static_cast<uint16_t>(raw_[size - 1]) << 8);
   if (crc(raw_, size - 2) != checksum) return;
-  const uint8_t opcode = raw_[3];
-  if (opcode & 0x80) return;  // Never reply to a reply.
-  const uint16_t request = raw_[4] | (static_cast<uint16_t>(raw_[5]) << 8);
+  const uint8_t type = raw_[3], opcode = raw_[4];
+  if (type > 1) return;  // Replies and undefined message types are never requests.
+  const uint16_t request = raw_[5] | (static_cast<uint16_t>(raw_[6]) << 8);
+  uint8_t* payload = raw_ + 9;
+  // All sound IDs are one-way, including unsupported/reserved IDs and bad arguments.
+  if (opcode >= 0x30) {
+    if (type == 0 && opcode == 0x54 && write_ && length >= 4 &&
+        (length & 1) == 0 && payload[0] == 0 && payload[1] == 0) {
+      for (size_t i = 2; i < length; i += 2) write_(payload[i], payload[i + 1]);
+    }
+    return;
+  }
   size_t responseLength = 1;
-  uint8_t status = 1;  // Rejected command/arguments; no error detail.
+  uint8_t status = 1;
   switch (opcode) {
-    case 0x00:  // RESET: completion only, no hardware failure detection.
-      if (length == 0) {
-        reset_();
-        status = 0;
-      }
+    case 0x00:
+      if (type == 1 && length == 0 && reset_) { reset_(); status = 0; }
       break;
-    case 0x01:  // PING, echo up to 32 bytes.
-      if (length <= 32) {
-        for (size_t i = length; i != 0; --i) raw_[8 + i] = raw_[7 + i];
+    case 0x01:
+      if (type == 1 && length <= 32) {
+        for (size_t i = length; i != 0; --i) payload[i] = payload[i - 1];
         responseLength += length;
         status = 0;
       }
       break;
-    case 0x02:  // INFO: status, model length/string, firmware length/string.
-      if (length == 0) {
+    case 0x02:
+      if (type == 1 && length == 0) {
         const char model[] = "NanoDrive 8";
-        size_t pos = 9;
-        raw_[pos++] = sizeof(model) - 1;
-        for (size_t i = 0; i < sizeof(model) - 1; ++i) raw_[pos++] = model[i];
+        size_t pos = 1;
+        payload[pos++] = sizeof(model) - 1;
+        for (size_t i = 0; i < sizeof(model) - 1; ++i) payload[pos++] = model[i];
         const size_t lengthPos = pos++;
         size_t count = 0;
-        while (firmware_[count] != 0 && count < 63) raw_[pos++] = firmware_[count++];
-        raw_[lengthPos] = static_cast<uint8_t>(count);
-        responseLength = pos - 8;
+        while (firmware_[count] != 0 && count < 63) payload[pos++] = firmware_[count++];
+        payload[lengthPos] = static_cast<uint8_t>(count);
+        responseLength = pos;
         status = 0;
       }
       break;
-    case 0x03:  // SET_OUTPUT_VOLUME: main output attenuation, 0..96 (96 = mute).
-      if (length == 1 && raw_[8] <= 96 && volume_ != nullptr) {
-        volume_(raw_[8]);
-        status = 0;
+    case 0x03:
+      if (length == 1 && payload[0] <= 96 && volume_) {
+        volume_(payload[0]); status = 0;
       }
       break;
-    case 0x54:  // YM2151 address/value pairs, with completion reply.
-    case 0x56:  // One-way YM2151 playback burst, no reply (even on rejection).
-      if (length >= 2 && (length & 1) == 0) {
-        for (size_t i = 0; i < length; i += 2) write_(raw_[8 + i], raw_[9 + i]);
-        status = 0;
+    case 0x04:
+      if (length == 6 && clock_) {
+        const uint32_t hz = uint32_t(payload[2]) | (uint32_t(payload[3]) << 8) |
+            (uint32_t(payload[4]) << 16) | (uint32_t(payload[5]) << 24);
+        if (hz != 0 && clock_(payload[0], payload[1], hz)) status = 0;
       }
       break;
-    case 0x57:  // SET_CHIP_CLOCK: chip ID + Hz (u32 LE), always one-way.
-      if (length == 5 && clock_ != nullptr) {
-        const uint32_t hz = static_cast<uint32_t>(raw_[9]) |
-            (static_cast<uint32_t>(raw_[10]) << 8) |
-            (static_cast<uint32_t>(raw_[11]) << 16) |
-            (static_cast<uint32_t>(raw_[12]) << 24);
-        if (hz != 0) clock_(raw_[8], hz);
+    case 0x05:
+      if (type == 1 && length == 2) {
+        const unsigned offset = unsigned(payload[0]) | (unsigned(payload[1]) << 8);
+        // Entries are fixed for the serial-mode hardware (OPM + OKI).
+        const uint8_t entries[][4] = {{0x54, 0, 0, 7}, {0xb7, 0, 0, 12}};
+        if (offset <= 2) {
+          const uint8_t header[] = {0, 0, 1, 0, 16, 0, 0, 0, 4, 1, 0, 255, 255,
+                                   static_cast<uint8_t>(2 - offset)};
+          for (size_t i = 0; i < sizeof(header); ++i) payload[i] = header[i];
+          size_t pos = sizeof(header);
+          for (unsigned i = offset; i < 2; ++i)
+            for (unsigned j = 0; j < 4; ++j) payload[pos++] = entries[i][j];
+          responseLength = pos;
+          status = 0;
+        }
       }
-      return;
-    case 0x58:  // Continuous ADPCM bytes, indexed; one-way.
-    case 0x59:  // Events indexed by ADPCM byte position; one-way.
-    case 0x5a:  // Start the prepared continuous stream; one-way.
-      if (audio_) audio_(opcode, raw_ + 8, length, nullptr);
-      return;
-    case 0x5b:  // Explicit diagnostics query, never a per-chunk ACK.
-      if (length == 0 && audio_) {
-        const size_t count = audio_(opcode, nullptr, 0, raw_ + 9);
+      break;
+    case 0x10:
+    case 0x11:
+    case 0x12:
+      if (type == 0 && audio_) audio_(opcode, payload, length, nullptr);
+      break;
+    case 0x13:
+      if (type == 1 && length == 2 && payload[0] == 0xb7 && payload[1] == 0 && audio_) {
+        const size_t count = audio_(opcode, payload, length, payload + 1);
         if (count <= MAX_PAYLOAD - 1) { responseLength += count; status = 0; }
       }
       break;
     default:
       break;
   }
-  if (opcode == 0x56) return;
-  raw_[8] = status;
-  reply(opcode | 0x80, request, responseLength);
+  if (type == 0) return;
+  payload[0] = status;
+  reply(opcode, request, responseLength);
 }
 
 void Protocol::reply(uint8_t opcode, uint16_t request, size_t payloadSize) {
-  raw_[0] = 'N'; raw_[1] = 'D'; raw_[2] = 1; raw_[3] = opcode;
-  raw_[4] = static_cast<uint8_t>(request); raw_[5] = request >> 8;
-  raw_[6] = static_cast<uint8_t>(payloadSize); raw_[7] = payloadSize >> 8;
-  const size_t size = 8 + payloadSize;
+  raw_[0] = 'N'; raw_[1] = 'D'; raw_[2] = 1; raw_[3] = 2; raw_[4] = opcode;
+  raw_[5] = static_cast<uint8_t>(request); raw_[6] = request >> 8;
+  raw_[7] = static_cast<uint8_t>(payloadSize); raw_[8] = payloadSize >> 8;
+  const size_t size = 9 + payloadSize;
   const uint16_t checksum = crc(raw_, size);
   raw_[size] = static_cast<uint8_t>(checksum); raw_[size + 1] = checksum >> 8;
   txOffset_ = 0;
