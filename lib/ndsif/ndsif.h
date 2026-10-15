@@ -5,6 +5,11 @@
 #include <stdint.h>
 
 namespace ndsif {
+// API identity and monotonically increasing specification revision.
+// Separate from the frame wire-version byte and the ND8 firmware version.
+constexpr char VERSION[] = "1.0";
+constexpr uint32_t REVISION = 38;
+
 // Formal-v1 draft framing; ND8 implements YM2151 and the optional OKI stream.
 class Protocol {
  public:

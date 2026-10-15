@@ -134,7 +134,6 @@ YMF278Bの3ページは、[ymfmの音源実装](https://github.com/aaronsgiles/y
 | AYの2個目、register `08` ← `0F` | `A0` | `01 00 08 0F` |
 | ページ2型の例: YMF278B page2のregister `08` ← `01` | `D0` | `00 02 08 01` |
 
-`WRITE_YM2151_BURST` や汎用の応答付き `WRITE_REGISTERS` は定義しない。音源ごとのWRITE要求が、そのままBURST。
 
 ## 5. 初期化・情報・同期
 

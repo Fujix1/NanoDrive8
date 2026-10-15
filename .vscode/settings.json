@@ -2,7 +2,7 @@
   "files.eol": "\n",
   "C_Cpp.formatting": "clangFormat",
   "C_Cpp.clang_format_style": "file",
-  "mmlx.serial.connection": "COM6",
+  "mmlx.serial.connection": "COM12",
   "mmlx.midi.input": "Digital Keyboard",
   "mmlx.serial.windowsNative": false,
 }

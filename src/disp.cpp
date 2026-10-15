@@ -5,9 +5,10 @@
 #include <cstdio>
 #include <cstring>
 
-#include "serialaudio.h"
+#include "ndsif.h"
 #include "pics.h"
 #include "png_renderer.h"
+#include "serialaudio.h"
 
 class ScopedEncoderDisable {
  public:
@@ -1339,15 +1340,14 @@ void PlayerWindow::redraw() {  // プレーヤー描画
   xSemaphoreGive(spFrameBuffer);
 }
 
-// ND6 と同じ Player 画面の構成でシリアルモードを表示する。
+// シリアルモードを表示
 static void setSerialModeLabels() {
   if (ndConfig.get(CFG_LANG) == LANG_JA) {
     lblTitle.prepareCaption("シリアルモード");
-    lblGame.prepareCaption("ベータ版");
   } else {
     lblTitle.prepareCaption("Serial Mode");
-    lblGame.prepareCaption("Beta Version");
   }
+  lblGame.prepareCaption(String("NDSIF v") + ndsif::VERSION);
   lblAuthor.prepareCaption("--");
   lblSystem.prepareCaption("YM2151 / M6258");
   drawPreparedPlayerLabels();
@@ -1363,9 +1363,17 @@ static void drawSerialModeFooter() {
   disp.render.setFontSize(13);
   disp.render.setFontColor(C_YELLOW, C_DARK);
   disp.render.setCursor(27, 284);
-  disp.render.printf("%s", ND::formatChipName(static_cast<si5351Freq_t>(serialYmClock.load(std::memory_order_relaxed)), CHIP_YM2151).c_str());
+  disp.render.printf(
+      "%s",
+      ND::formatChipName(static_cast<si5351Freq_t>(serialYmClock.load(std::memory_order_relaxed)),
+                         CHIP_YM2151)
+          .c_str());
   disp.render.setCursor(27, 303);
-  disp.render.printf("%s", ND::formatChipName(static_cast<si5351Freq_t>(serialOkiClock.load(std::memory_order_relaxed)), CHIP_OKIM6258).c_str());
+  disp.render.printf(
+      "%s",
+      ND::formatChipName(static_cast<si5351Freq_t>(serialOkiClock.load(std::memory_order_relaxed)),
+                         CHIP_OKIM6258)
+          .c_str());
   disp.render.setFontColor(C_LIGHTGRAY, C_FOOTER_INACTIVE);
   disp.render.setCursor(11, 284);
   disp.render.printf("1");
@@ -1383,8 +1391,8 @@ void serialModeUpdateFooter() {
 
 static void drawPendingSerialFooter() {
   if (!serialFooterPending.load(std::memory_order_acquire) ||
-      disp.currentView != ViewMode::Player ||
-      xSemaphoreTake(spFrameBuffer, 0) != pdTRUE) return;
+      disp.currentView != ViewMode::Player || xSemaphoreTake(spFrameBuffer, 0) != pdTRUE)
+    return;
   serialFooterPending.exchange(false, std::memory_order_acquire);
   if (ND::currentMode == MODE_SERIAL && disp.currentView == ViewMode::Player) {
     disp.render.setUseRenderTask(false);
@@ -1403,8 +1411,7 @@ void serialModeDraw() {
   playerWindow.drawBG();
   disp.render.setUseRenderTask(false);
   disp.render.setDrawer(frameBuffer);
-  frameBuffer.pushImage(LCD_W - 2 - USB_ICON_WIDTH, 2, USB_ICON_WIDTH, USB_ICON_HEIGHT,
-                        usb_icon);
+  frameBuffer.pushImage(LCD_W - 2 - USB_ICON_WIDTH, 2, USB_ICON_WIDTH, USB_ICON_HEIGHT, usb_icon);
 
   drawSerialModeFooter();
 
@@ -1545,7 +1552,9 @@ class ScopedConfigFont {
     disp.render.setUseRenderTask(false);
     disp.render.loadFont(fontMain, sizeof(fontMain));
   }
-  ~ScopedConfigFont() { disp.render.unloadFont(); }
+  ~ScopedConfigFont() {
+    disp.render.unloadFont();
+  }
 };
 
 static void pushConfigFrame() {
@@ -1640,8 +1649,10 @@ void CFGWindow::eventHandler(event event) {
         // Serial.printf("CFG Window::Close event.\n");
         this->close();
         if (ND::currentMode == MODE_SERIAL) {
-          if (_returnView == ViewMode::Visual) visualWindow.show();
-          else playerWindow.show();
+          if (_returnView == ViewMode::Visual)
+            visualWindow.show();
+          else
+            playerWindow.show();
           break;
         }
         if (ndConfig.get(CFG_CONTROL) == CTRL_2) {
@@ -1787,7 +1798,6 @@ void CFGWindow::drawPanelView() {
     currentItemIndex = pnlConfig.currentIndex;
 
     drawFooter(true);
-
   }
   pushConfigFrame();
   xSemaphoreGive(spFrameBuffer);
@@ -2074,8 +2084,7 @@ void VisualWindow::drawTimestamp(int64_t sec, bool toFrameBuffer, bool visible) 
   const int tempoBpm = ND::currentMode == MODE_SERIAL || ND::fileFormat != FileFormat::MDX
                            ? kTempoHidden
                            : (MDX.hasExplicitTempo() ? MDX.getTempoBpm() : kTempoNoteOnly);
-  if (_lastTimestampSec == sec && _lastTempoBpm == tempoBpm &&
-      _lastTimestampVisible == visible) {
+  if (_lastTimestampSec == sec && _lastTempoBpm == tempoBpm && _lastTimestampVisible == visible) {
     return;
   }
 
@@ -2220,8 +2229,8 @@ void VisualWindow::update() {
       memset(keySnapshot, 0, sizeof(keySnapshot));
       memset(levelSnapshot, 0, sizeof(levelSnapshot));
       levelSnapshot[8] = SerialAudio::takeMeterLevel();
-      const float clockSemitones = 12 * log2f(
-          float(serialYmClock.load(std::memory_order_relaxed)) / 3579545.0f);
+      const float clockSemitones =
+          12 * log2f(float(serialYmClock.load(std::memory_order_relaxed)) / 3579545.0f);
       for (int ch = 0; ch < 8; ++ch) {
         // Pitch and TL may come from adjacent writes; display follows latest state.
         const uint32_t pitch = FM.visualPitch[ch].load(std::memory_order_relaxed);
@@ -2229,14 +2238,16 @@ void VisualWindow::update() {
         const u8_t kc = pitch, kf = pitch >> 8, slots = pitch >> 16, pan = pitch >> 24;
         const int note = notes[kc & 15];
         if (slots && note >= 0) {
-          const float semitone = 12 * (((kc >> 4) & 7) + 1 + ((kc & 15) == 14)) +
-              note + (kf >> 2) / 64.0f + clockSemitones;
+          const float semitone = 12 * (((kc >> 4) & 7) + 1 + ((kc & 15) == 14)) + note +
+                                 (kf >> 2) / 64.0f + clockSemitones;
           const int n = int(roundf(semitone));
           if (n >= 12) keySnapshot[YM2151][ch] = {n / 12, n % 12};
         }
-        panSnapshot[ch] = (pan & 0xc0) == 0xc0 ? PAN_CENTER :
-            (pan & 0x80) ? PAN_LEFT : (pan & 0x40) ? PAN_RIGHT : PAN_MUTE;
-        panSnapshot[ch + 8] = PAN_MUTE; // Raw ADPCM carries no note/channel metadata.
+        panSnapshot[ch] = (pan & 0xc0) == 0xc0 ? PAN_CENTER
+                          : (pan & 0x80)       ? PAN_LEFT
+                          : (pan & 0x40)       ? PAN_RIGHT
+                                               : PAN_MUTE;
+        panSnapshot[ch + 8] = PAN_MUTE;  // Raw ADPCM carries no note/channel metadata.
         for (int op = 0; op < 4; ++op) {
           if (slots & carriers[pan & 7] & (1 << op)) {
             const u8_t level = (127 - ((tl >> (8 * op)) & 127)) >> 3;
@@ -2267,8 +2278,9 @@ void VisualWindow::update() {
     const uint16_t keyColor = static_cast<uint16_t>(ndConfig.get(CFG_KEYON));
     for (int device = 0; device < DEVICE_COUNT; ++device) {
       const bool changed = !keyboardSnapshotValid[device] || keyColor != drawnKeyboardColor ||
-          memcmp(drawnKeyboardNotes[device], keySnapshot[device], sizeof(keySnapshot[device])) != 0 ||
-          (device == YM2151 && drawnKeyboardMask != ym2151ChannelMaskSnapshot);
+                           memcmp(drawnKeyboardNotes[device], keySnapshot[device],
+                                  sizeof(keySnapshot[device])) != 0 ||
+                           (device == YM2151 && drawnKeyboardMask != ym2151ChannelMaskSnapshot);
       if (!changed) continue;
       keyboardBuffer.pushSprite(&keyboardBufferSub, 0, 0);
       keyboardDrawChannelMask = device == YM2151 ? ym2151ChannelMaskSnapshot : 0;
