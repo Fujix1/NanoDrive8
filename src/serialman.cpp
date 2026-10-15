@@ -17,6 +17,23 @@ namespace {
 portMUX_TYPE usbEventMux = portMUX_INITIALIZER_UNLOCKED;
 uint32_t pendingBusResets = 0;
 bool audioFooterPending = false;
+ndsif::Capability serialCapabilities[2];
+
+void configureCapabilities() {
+  // Serial-mode register/stream routes are OPM + OKI. Clock policy comes from
+  // this board's configured clock slots, not the mere presence of a clock IC.
+  const t_chip chips[] = {CHIP_YM2151, CHIP_OKIM6258};
+  const uint8_t ids[] = {0x54, 0xb7};
+  const uint8_t features[] = {3, 8};
+  for (unsigned i = 0; i < 2; ++i) {
+    const bool variable = ND::clockSlot[chips[i]] < ND::freq.size();
+    serialCapabilities[i] = {ids[i], 0, 0, uint8_t(features[i] | (variable ? 4 : 0)),
+        variable ? ndsif::CLOCK_VARIABLE : ndsif::CLOCK_UNKNOWN, 0};
+    // A board using a fixed oscillator supplies CLOCK_FIXED and its actual
+    // logical input Hz here. An unspecified fixed frequency stays UNKNOWN.
+  }
+}
+
 
 void usbBusReset(void*, esp_event_base_t, int32_t, void*) {
   // USB イベントタスクからの通知。画面描画や受信バッファ操作は受信タスクで行う。
@@ -114,6 +131,9 @@ void SerialMan::init() {
   SerialAudio::init(setOkiClock);
   protocol.configure(resetChips, writeYM2151, ND_FIRMWARE_VERSION, setChipClock,
                      SerialAudio::command, setOutputVolume);
+  configureCapabilities();
+  const bool capabilitiesReady = protocol.setCapabilities(serialCapabilities, 2);
+  configASSERT(capabilitiesReady);
   status.usbLinkActive = Serial.isPlugged();
   Serial.onEvent(ARDUINO_HW_CDC_BUS_RESET_EVENT, usbBusReset);
 

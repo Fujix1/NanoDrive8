@@ -8,7 +8,15 @@ namespace ndsif {
 // API identity and monotonically increasing specification revision.
 // Separate from the frame wire-version byte and the ND8 firmware version.
 constexpr char VERSION[] = "1.0";
-constexpr uint32_t REVISION = 38;
+constexpr uint32_t REVISION = 39;
+
+// Logical input-clock capabilities, independent of the oscillator/clock IC.
+enum ClockMode : uint8_t { CLOCK_UNKNOWN = 0, CLOCK_FIXED = 1, CLOCK_VARIABLE = 2 };
+struct Capability {
+  uint8_t writeID, instance, page, features;
+  ClockMode clockMode;
+  uint32_t fixedClockHz; // Nonzero only for CLOCK_FIXED; logical chip input Hz.
+};
 
 // Formal-v1 draft framing; ND8 implements YM2151 and the optional OKI stream.
 class Protocol {
@@ -25,6 +33,8 @@ class Protocol {
 
   void configure(Reset reset, WriteYM write, const char* firmware, SetClock clock = nullptr,
                  Audio audio = nullptr, SetVolume volume = nullptr);
+  // Board-owned stable table; must remain alive until replaced/configured.
+  bool setCapabilities(const Capability* entries, size_t count);
   // After transport data loss, ignore bytes until a delimiter arrives.
   void clear(bool resync = false);
   void expire(uint32_t now);
@@ -38,6 +48,8 @@ class Protocol {
   void dispatch(size_t size);
   void reply(uint8_t opcode, uint16_t request, size_t payloadSize);
   static uint16_t crc(const uint8_t* data, size_t size);
+  const Capability* capabilities_ = nullptr;
+  uint16_t capabilityCount_ = 0;
   Reset reset_ = nullptr;
   WriteYM write_ = nullptr;
   SetClock clock_ = nullptr;

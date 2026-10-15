@@ -9,7 +9,27 @@ void Protocol::configure(Reset reset, WriteYM write, const char* firmware, SetCl
   audio_ = audio;
   volume_ = volume;
   firmware_ = firmware;
+  capabilities_ = nullptr; capabilityCount_ = 0;
   clear();
+}
+
+bool Protocol::setCapabilities(const Capability* entries, size_t count) {
+  if (count > 65535 || (count != 0 && entries == nullptr)) return false;
+  for (size_t i = 0; i < count; ++i) {
+    const Capability& e = entries[i];
+    if (e.clockMode > CLOCK_VARIABLE ||
+        (e.clockMode == CLOCK_FIXED && (e.fixedClockHz == 0 || (e.features & 4))) ||
+        (e.clockMode != CLOCK_FIXED && e.fixedClockHz != 0) ||
+        (e.clockMode == CLOCK_VARIABLE && !(e.features & 4))) return false;
+    for (size_t j = 0; j < i; ++j) {
+      const Capability& previous = entries[j];
+      if (e.writeID == previous.writeID && e.instance == previous.instance &&
+          (e.page == previous.page || e.clockMode != previous.clockMode ||
+           e.fixedClockHz != previous.fixedClockHz)) return false;
+    }
+  }
+  capabilities_ = entries; capabilityCount_ = static_cast<uint16_t>(count);
+  return true;
 }
 
 void Protocol::clear(bool resync) {
@@ -131,15 +151,24 @@ void Protocol::dispatch(size_t size) {
     case 0x05:
       if (type == 1 && length == 2) {
         const unsigned offset = unsigned(payload[0]) | (unsigned(payload[1]) << 8);
-        // Entries are fixed for the serial-mode hardware (OPM + OKI).
-        const uint8_t entries[][4] = {{0x54, 0, 0, 7}, {0xb7, 0, 0, 12}};
-        if (offset <= 2) {
-          const uint8_t header[] = {0, 0, 1, 0, 16, 0, 0, 0, 4, 1, 0, 255, 255,
-                                   static_cast<uint8_t>(2 - offset)};
+        if (offset <= capabilityCount_) {
+          constexpr size_t HeaderSize = 14, EntrySize = 9;
+          const size_t remaining = capabilityCount_ - offset;
+          const size_t limit = (MAX_PAYLOAD - HeaderSize) / EntrySize;
+          const size_t count = remaining < limit ? remaining : limit;
+          const uint16_t next = count == remaining ? 0xffff : uint16_t(offset + count);
+          const uint8_t header[] = {0, 0, 1, 0, 16, 0, 0, 0, 4,
+              uint8_t(volume_ ? 1 : 0), 0, uint8_t(next), uint8_t(next >> 8), uint8_t(count)};
           for (size_t i = 0; i < sizeof(header); ++i) payload[i] = header[i];
-          size_t pos = sizeof(header);
-          for (unsigned i = offset; i < 2; ++i)
-            for (unsigned j = 0; j < 4; ++j) payload[pos++] = entries[i][j];
+          size_t pos = HeaderSize;
+          for (size_t i = 0; i < count; ++i) {
+            const Capability& e = capabilities_[offset + i];
+            payload[pos++] = e.writeID; payload[pos++] = e.instance;
+            payload[pos++] = e.page; payload[pos++] = e.features;
+            payload[pos++] = e.clockMode;
+            for (unsigned shift = 0; shift < 32; shift += 8)
+              payload[pos++] = uint8_t(e.fixedClockHz >> shift);
+          }
           responseLength = pos;
           status = 0;
         }

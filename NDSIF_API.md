@@ -1,7 +1,7 @@
 # NDSIF 汎用API仕様
 
-文書版: 0.38 / Draft
-更新日: 2026-10-14
+文書版: 0.39 / Draft
+更新日: 2026-10-15
 対象: 音源レジスタ通信のホスト・受信機
 策定対象: 正式v1、未成立。wire版の候補値: `01`
 
@@ -177,9 +177,10 @@ status:u8 + max_payload:u16 + data_capacity:u32 + event_capacity:u16
  + entries[entry_count]
 
 entry = write_id:u8 + instance:u8 + page:u8 + features:u8
+      + clock_mode:u8 + fixed_clock_hz:u32
 ```
 
-固定部分14 byte、1entryは4 byte、256 byte上限では最大60entry。next_offset=`FFFF` は一覧の終端、それ以外は次に問い合わせるoffset。受信機は同じ対応構成の一貫した一覧を返す。ホストは終端まで取得し、循環・重複・不正長を拒否する。対応構成が変わった場合は取得をやり直す。
+固定部分14 byte、1entryは9 byte、256 byte上限では最大26entry。next_offset=`FFFF` は一覧の終端、それ以外は次に問い合わせるoffset。受信機は同じ対応構成の一貫した一覧を返す。ホストは終端まで取得し、循環・重複・不正長を拒否する。対応構成が変わった場合は取得をやり直す。
 
 | features bit | 意味 |
 | ---: | --- |
@@ -188,9 +189,32 @@ entry = write_id:u8 + instance:u8 + page:u8 + features:u8
 | 2 | 論理クロック設定 |
 | 3 | この音源・個体の任意ストリームプロファイル |
 
+各entryは論理音源本来の入力クロックについて、次の情報を返す。u32はlittle-endian。
+
+| clock_mode | 意味 | fixed_clock_hz |
+| ---: | --- | --- |
+| `00` | 不明・未開示 | 0 |
+| `01` | 固定クロック | 実際の固定入力周波数Hz、1以上 |
+| `02` | NDSIFから変更可能（variable） | 0 |
+
+例: YM2151が固定3,579,545Hzなら`54 00 00 03 01 99 9E 36 00`。
+変更可能なYM2151なら`54 00 00 07 02 00 00 00 00`。
+clock_mode=01のentryはfeatures bit2を立てず、02のentryはbit2を立てる。
+不明を固定と読み替えず、固定以外のfixed_clock_hzは0とする。未定義のmodeや矛盾したentryは拒否する。
+同じwrite_id・instanceの各pageは同じclock_mode・fixed_clock_hzを返す。
+
+variableはSi5351等の特定ICを意味せず、NDSIF経由で設定を変更できることを示す。
+任意Hz、連続可変、厳密な周波数精度を保証せず、対応Hz・正規化・共有制約は受信機資料で確認する。
+fixed_clock_hzは現在値の読戻しではなく固定ハードウェアの入力周波数であり、ホストによる互換倍率の適用前の論理Hzで通知する。
+固定ハードではホストはSET_CHIP_CLOCKを送らず、曲の要求Hzとの不一致を表示して利用を中止するか、明示的に対応した上流の変換処理を使う。
+ストリームのSTART/kind=1でも、受信機は固定ハードで実現不能な周波数変更を適用しない。
+
+この9 byteエントリーはrevision 39から使用する。revision 38の4 byte形式は残さず、同じGET_CAPABILITIES要求を新形式へ置き換える。
+wire版の候補値01とAPI文字列1.0は変更しない。ホスト・受信機を同時に更新する。
+
 control_features bit0はSET_OUTPUT_VOLUMEの対応を示す。他のbitは予約。max_payloadはこの版では256以下。data_capacityはストリームの未供給byte容量、event_capacityは未実行のレジスタ組等の件数。対応しない機能の容量は0。複数ストリームの個別容量が異なる場合の詳細通知は今後の拡張事項で、共通値は全対応ストリームで使用できる保守的な上限とする。
 
-ページ0・1・2を持つ音源は、同じwrite_id・instanceについて各pageを別entryで示す。別IDにも対応する場合はその別IDも示す。この一覧は物理スロットを固定しない。対応周波数・許容近似・共有関係の詳細な表現形式は別途定義する。
+ページ0・1・2を持つ音源は、同じwrite_id・instanceについて各pageを別entryで示す。別IDにも対応する場合はその別IDも示す。この一覧は物理スロットを固定しない。変更可能な周波数の一覧・許容近似・共有関係の詳細な表現形式は別途定義する。
 
 ## 8. 任意ストリーム — MSM6258互換ADPCMプロファイル
 
