@@ -1,10 +1,11 @@
-# Nano Drive 8 Firmware Development
+# Nano Drive 8 Music Player
 
-Firmware development project for Nano Drive 8.
+<img width="1980" height="1170" alt="nd8" src="https://github.com/user-attachments/assets/b06bdf91-a848-4d1e-8800-70cc120f9cc6" />
+
 
 ## Nano Drive 8 とは何？
 
-Nano Drive 8 は、USB 電源だけで動くコンパクトな FM 音源 + ADPCM 音源再生キットです。MDX, VGM, VGZ フォーマットに対応しています。
+Nano Drive 8 は、USB 電源だけで動くコンパクトな FM 音源 + ADPCM 音源再生キットです。MDX, VGM, VGZ フォーマットに対応しています。また、PC や Mac などから USB Serial で制御したり、MIDI キーボードで演奏することができます。
 
 ### ハードウェア構成
 
