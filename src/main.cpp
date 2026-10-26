@@ -53,10 +53,10 @@
  *
  */
 
-#include "config.h"
-
 #include <driver/gpio.h>
 #include <esp_intr_alloc.h>
+
+#include "config.h"
 //--
 #include "NJU72342.h"
 #include "SI5351.hpp"
@@ -102,7 +102,7 @@ void setup() {
   lcd.println("2024 -2026 Fujix@e2j.net");
   lcd.printf("Firmware ver %s\n\n", ND_FIRMWARE_VERSION);
 
-  delay(100);  // 安定用必須
+  delay(200);  // 安定用必須
 
   // PSRAM 初期化確認
   if (psramInit()) {
@@ -111,6 +111,8 @@ void setup() {
     lcd.printf("[ERROR] PSRAM not available.\n");
     exit;
   }
+
+  delay(200);  // 安定用必須
 
   // ユーザ設定
   ndConfig.init();
@@ -121,8 +123,8 @@ void setup() {
   // internal RAM only: keep its requests serviced while NVS writes disable
   // the flash cache. Player audio still reads PSRAM, so retain its existing
   // non-IRAM allocation. Choose after loading the mode, before adding input.
-  const int gpioIsrFlags = ESP_INTR_FLAG_LEVEL3 |
-      (ND::currentMode == MODE_SERIAL ? ESP_INTR_FLAG_IRAM : 0);
+  const int gpioIsrFlags =
+      ESP_INTR_FLAG_LEVEL3 | (ND::currentMode == MODE_SERIAL ? ESP_INTR_FLAG_IRAM : 0);
   ESP_ERROR_CHECK(gpio_install_isr_service(gpioIsrFlags));
 
   // ﾆｭｳﾘｮｸ
