@@ -12,6 +12,12 @@ Nano Drive 8 は、USB 電源だけで動くコンパクトな FM 音源 + ADPCM
 - ADPCM 音源: OKI MSM6258
 - 制御マイコン: ESP32-S3
 
+### 最大ファイルサイズ
+
+- VGM: 制限なし
+- VGZ: 解凍した VGM ファイルが 6MB まで
+- MDX: 256KB
+- PDX: 1.2MB (これより大きいものは missing と表示されます)
 
 ### 設定オプション
 
