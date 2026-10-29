@@ -8,7 +8,7 @@ namespace ndsif {
 // API identity and monotonically increasing specification revision.
 // Separate from the frame wire-version byte and the ND8 firmware version.
 constexpr char VERSION[] = "1.0";
-constexpr uint32_t REVISION = 39;
+constexpr uint32_t REVISION = 40; // Protocol revision; optional profiles are capability-gated.
 
 // Logical input-clock capabilities, independent of the oscillator/clock IC.
 enum ClockMode : uint8_t { CLOCK_UNKNOWN = 0, CLOCK_FIXED = 1, CLOCK_VARIABLE = 2 };
@@ -18,7 +18,7 @@ struct Capability {
   uint32_t fixedClockHz; // Nonzero only for CLOCK_FIXED; logical chip input Hz.
 };
 
-// Formal-v1 draft framing; ND8 implements YM2151 and the optional OKI stream.
+// Formal-v1 draft framing. Device-specific routes and identity are board-owned.
 class Protocol {
  public:
   static constexpr size_t MAX_PAYLOAD = 256;
@@ -27,12 +27,19 @@ class Protocol {
   static constexpr uint32_t FRAME_TIMEOUT_MS = 500;
   using Reset = void (*)();
   using WriteYM = void (*)(uint8_t, uint8_t);
+  // The board validates the entire burst before touching any hardware.
+  using WriteRegisters = void (*)(uint8_t, uint8_t, uint8_t, const uint8_t*, size_t);
   using Audio = size_t (*)(uint8_t, const uint8_t*, size_t, uint8_t*);
   using SetClock = bool (*)(uint8_t, uint8_t, uint32_t);
   using SetVolume = void (*)(uint8_t);
+  // SIZE_MAX rejects a control; otherwise return response bytes (excluding status).
+  using Extension = size_t (*)(uint8_t, uint8_t, const uint8_t*, size_t, uint8_t*);
 
   void configure(Reset reset, WriteYM write, const char* firmware, SetClock clock = nullptr,
                  Audio audio = nullptr, SetVolume volume = nullptr);
+  void setExtension(Extension extension) { extension_ = extension; }
+  void setRegisterWriter(WriteRegisters write) { registerWrite_ = write; }
+  void setDeviceInfo(const char* model, uint32_t dataCapacity = 0, uint16_t eventCapacity = 0);
   // Board-owned stable table; must remain alive until replaced/configured.
   bool setCapabilities(const Capability* entries, size_t count);
   // After transport data loss, ignore bytes until a delimiter arrives.
@@ -52,6 +59,11 @@ class Protocol {
   uint16_t capabilityCount_ = 0;
   Reset reset_ = nullptr;
   WriteYM write_ = nullptr;
+  WriteRegisters registerWrite_ = nullptr;
+  Extension extension_ = nullptr;
+  const char* model_ = "";
+  uint32_t dataCapacity_ = 4096;
+  uint16_t eventCapacity_ = 1024;
   SetClock clock_ = nullptr;
   Audio audio_ = nullptr;
   SetVolume volume_ = nullptr;

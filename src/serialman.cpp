@@ -131,6 +131,7 @@ void SerialMan::init() {
   SerialAudio::init(setOkiClock);
   protocol.configure(resetChips, writeYM2151, ND_FIRMWARE_VERSION, setChipClock,
                      SerialAudio::command, setOutputVolume);
+  protocol.setDeviceInfo("NanoDrive 8", 4096, 1024);
   configureCapabilities();
   const bool capabilitiesReady = protocol.setCapabilities(serialCapabilities, 2);
   configASSERT(capabilitiesReady);
