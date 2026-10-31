@@ -89,7 +89,7 @@ void setup() {
   Serial.printf("Flash - %'d Bytes at %'d\n", ESP.getFlashChipSize(), ESP.getFlashChipSpeed());
   Serial.printf("PSRAM - Total %'d, Free %'d\n", ESP.getPsramSize(), ESP.getFreePsram());
 
-  delay(100);
+  delay(200);
   Wire.begin(I2C_SDA, I2C_SCL, I2C_CLOCK);
 
   // ディスプレイ初期化
@@ -102,7 +102,7 @@ void setup() {
   lcd.println("2024 -2026 Fujix@e2j.net");
   lcd.printf("Firmware ver %s\n\n", ND_FIRMWARE_VERSION);
 
-  delay(200);  // 安定用必須
+  delay(300);  // 安定用必須
 
   // PSRAM 初期化確認
   if (psramInit()) {
@@ -112,7 +112,7 @@ void setup() {
     exit;
   }
 
-  delay(200);  // 安定用必須
+  delay(300);  // 安定用必須
 
   // ユーザ設定
   ndConfig.init();
