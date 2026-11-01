@@ -1396,6 +1396,7 @@ void MDXClass::processTick() {
           }
           if (!(tracks[i].flagsB3 & 0x08) && tracks[i].LFODelay > 0) {
             startLFODelay(tracks[i]);
+            _setVolume(i);  // リセットした音量 LFO をキーオン前に反映
           }
           if (!(tracks[i].flagsB3 & 0x08)) {
             resetOpmLFOIfNeeded(tracks[i]);
@@ -1507,6 +1508,7 @@ void MDXClass::processTick() {
                 }
                 if (!(tracks[i].flagsB3 & 0x08) && tracks[i].LFODelay > 0) {
                   startLFODelay(tracks[i]);
+                  _setVolume(i);  // リセットした音量 LFO をキーオン前に反映
                 }
                 tracks[i].bendOffset = 0;
                 if (!(tracks[i].flagsB3 & 0x08)) {
