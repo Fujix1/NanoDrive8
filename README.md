@@ -139,6 +139,10 @@ https://github.com/yosshin4004/portable_mdx
 
 その他の外部ライブラリ、フォント、および帰属表示については [license.txt](license.txt) を参照してください。
 
+## マニュアル / Manual
+
+[manual_8.pdf](https://github.com/user-attachments/files/34307420/manual_8.pdf)
+
 
 ## License
 
