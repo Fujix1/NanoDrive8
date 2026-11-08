@@ -3,20 +3,23 @@
 <img width="1980" height="1170" alt="nd8" src="https://github.com/user-attachments/assets/b06bdf91-a848-4d1e-8800-70cc120f9cc6" />
 
 
-## Nano Drive 8 とは何？
+## Nano Drive 8 とは何？ / What is Nano Drive 8?
 
 Nano Drive 8 は、USB 電源だけで動くコンパクトな FM 音源 + ADPCM 音源再生キットです。MDX, VGM, VGZ フォーマットに対応しています。また、PC や Mac などから USB Serial で制御したり、MIDI キーボードで演奏することができます。
 
-### ハードウェア構成
+NanoDrive 8 is an MDX/VGM music player powered by an ESP32-S3 microcontroller. You can play files directly from an SD card, send music data from a PC, Mac, or Linux computer using
+various tools, and connect MIDI devices. It’s designed to play music from systems such as those equipped with the YM2151 FM sound chip and OKI MSM6258 ADPCM chip, as well as arcade machines.
 
-- FM 音源: YM2151
-- ADPCM 音源: OKI MSM6258
-- 制御マイコン: ESP32-S3
+### ハードウェア構成 / Hardware
 
-### 最大ファイルサイズ
+- FM 音源 / FM Sound Chip: YM2151
+- ADPCM 音源 / ADPCM Sound Chip: OKI MSM6258
+- 制御マイコン / Controller: ESP32-S3
 
-- VGM: 制限なし
-- VGZ: 解凍した VGM ファイルが 6MB まで
+### 最大ファイルサイズ / Max File Size
+
+- VGM: 制限なし / No limit
+- VGZ: 解凍した VGM ファイルが 6MB まで / Original decompressed vgm is up to 6 MB
 - MDX: 256KB
 - PDX: 1.2MB (これより大きいものは missing と表示されます)
 
