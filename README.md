@@ -143,6 +143,10 @@ https://github.com/yosshin4004/portable_mdx
 
 [manual_8.pdf](https://github.com/user-attachments/files/34307420/manual_8.pdf)
 
+## 回路図 / Schematic
+
+[nd8_schematic.pdf](https://github.com/user-attachments/files/34539409/nd8_schematic.pdf)
+
 
 ## License
 
