@@ -98,7 +98,7 @@ static u8_t drawnKeyboardMask = 0;
 static uint16_t drawnKeyboardColor = 0;
 
 static constexpr unsigned long kFontCacheSize =
-    16 * 1024;  // OpenFontRender キャッシュ上限（バイト）
+    8 * 1024;  // OpenFontRender キャッシュ上限（バイト）
 
 static constexpr u8_t kLevelSpriteCount = 16;  // level 0 .. 15
 static constexpr u16_t kLevelSpriteWidth = levelsWidth;

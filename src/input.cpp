@@ -572,7 +572,7 @@ bool Input::init() {
   xQueueInput = xQueueCreate(1, sizeof(event));
 
   // イベントループタスク
-  xTaskCreateUniversal(eventLoop, "eventloop", 10000, NULL, 1, &tskEventLoop, PRO_CPU_NUM);
+  xTaskCreateUniversal(eventLoop, "eventloop", 6000, NULL, 1, &tskEventLoop, PRO_CPU_NUM);
 
   // TCA8418 初期化
   pinMode(TCA8418_IRQ_PIN, INPUT);
