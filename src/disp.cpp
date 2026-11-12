@@ -1215,7 +1215,7 @@ void unlockDrawing() {
   xSemaphoreGive(spFrameBuffer);
 }
 
-Disp disp = Disp();
+Disp disp;
 
 //---------------------------------------------------------------------------
 // プレイヤー画面クラス
@@ -1548,9 +1548,7 @@ PlayerWindow playerWindow = PlayerWindow();
 ConfigPanelRenderer configRenderer;
 static Panel pnlConfig = Panel(0, 26, LCD_W, 264, CFG_ITEM_HEIGHT, &configRenderer);
 
-// FreeType has a shared library lifetime in OpenFontRender. Keep one font
-// loaded for the entire panel update, rather than loading/unloading per row
-// while another renderer still owns a face from the same library.
+// Keep one font loaded for the entire panel update to reuse its glyph cache.
 class ScopedConfigFont {
  public:
   ScopedConfigFont() {
@@ -2162,7 +2160,6 @@ void VisualWindow::draw() {
 
   memset(keyboardSnapshotValid, 0, sizeof(keyboardSnapshotValid));
 
-  // OpenFontRenderは内部のFreeType状態を全インスタンスで共有するため、
   // 他画面の描画と競合しない描画ロック内でPlayer用Labelも先行生成する。
   preparePlayerLabels(playerWindow.dispData);
   pushVisualImage(frameBuffer, 0, 0, keyboardWidth, keyboardHeight, keyboard);
@@ -2935,8 +2932,7 @@ void BrowserWindow::show() {
   visible = true;
   disp.currentView = ViewMode::Browser;
 
-  // OpenFontRenderは内部のFreeType状態を全インスタンスで共有するため、
-  // 曲切り替え直後のPlayer/Visual用ラベル生成と競合させない。
+  // 共有の描画先・ラベルへのアクセスを曲切り替え時の描画と直列化する。
   lockDrawing();
   browserRenderer.init();
   drawFooterStatic();
