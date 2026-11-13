@@ -50,3 +50,5 @@ Thumbs.db
 *.tmp
 
 settings.json
+/tools/mame_nd8/setting.ini
+/tools/mame_nd8/__pycache__/
