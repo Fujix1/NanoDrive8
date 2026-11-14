@@ -50,6 +50,7 @@ Thumbs.db
 *.tmp
 
 settings.json
-/tools/mame_nd8/setting.ini
-/tools/mame_nd8/__pycache__/
+/tools/namadora/setting.ini
+/tools/namadora/__pycache__/
 setting.ini
+/tools/namadora/serial/

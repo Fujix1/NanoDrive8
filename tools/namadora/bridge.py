@@ -1,4 +1,4 @@
-"""Sega System 16A/16B or C/C2 MAME plugin -> NDSIF bridge; requires pyserial."""
+"""NDSIF bridge server; requires pyserial."""
 import argparse
 import binascii
 import os
