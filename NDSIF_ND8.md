@@ -25,7 +25,7 @@ RESET時のミュート、OKIのデコード開始と無音供給、出力安定
 GET_CAPABILITIESのentryは9 byteへ変更し、clock_modeとfixed_clock_hzを返す。
 ND8の現在の構成はYM2151、OKIM6258ともSi5351出力を使用するためvariable（02）、fixed_clock_hz=0。
 これは設定されたクロックスロットに基づく通知で、ICの自動検出や実周波数の読戻しではない。
-YM2151は従来のnormalizeFreqで設定可能な値、OKIM6258は4/8MHzの範囲で変更する。
+YM2151はnormalizeFreqで設定可能な値（4,026,987 Hzを含む）、OKIM6258は4/8MHzの範囲で変更する。
 
 音源一覧はProtocol内の固定byte配列から、ボード側の`src/serialman.cpp`が渡すCapabilityテーブルへ移した。
 別の固定クロック構成ではCLOCK_FIXEDと実際の論理入力Hzを設定し、featuresのクロック設定bitを外す。

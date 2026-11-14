@@ -952,7 +952,7 @@ def nd8_connection(nd, conn, *, stop_event=None):
                     nd.request(4, struct.pack('<BBI', 0x54, 0, hz))
                     # Current ND8 firmware normalizes requests to its clock
                     # table; the protocol response does not report the result.
-                    if hz not in (3375000, 3500000, 4000000) and not 3579000 <= hz <= 3580000:
+                    if hz not in (3375000, 3500000, 4000000, 4026987) and not 3579000 <= hz <= 3580000:
                         print(f'ND8: {hz} Hz is not an exact supported clock; firmware may use 3579545 Hz',
                               file=sys.stderr, flush=True)
                 elif chip[4] != 1 or int.from_bytes(chip[5:9], 'little') != hz:
