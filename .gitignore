@@ -53,3 +53,4 @@ settings.json
 /tools/namadora/setting.ini
 /tools/namadora/__pycache__/
 setting.ini
+/tools/namadora/serial/
