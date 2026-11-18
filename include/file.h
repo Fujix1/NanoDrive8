@@ -39,8 +39,6 @@ class NDFile {
   bool processPendingPlayRequest();
   Node* currentNode;
 
-  void getAttValueInDir(const String& dirPath);  // フォルダの音量減衰取得
-
   u8_t* data;  // データ本体
   u32_t pos;   // データ位置
   u32_t size;  // ファイルサイズ
@@ -114,7 +112,6 @@ class NDFile {
     }
   };
 
-  u8_t _att;  // 現在のフォルダの全体減衰量 db
   volatile bool _playRequestPending = false;
   Node* _requestedNode = nullptr;
   RandomSequenceState _folderFileRandomState;
@@ -144,6 +141,7 @@ enum NodeType : u8_t { NODE_TYPE_DIR, NODE_TYPE_FILE };
 // ファイルノード
 struct Node {
   NodeType type;
+  int8_t folderAtt = -1;  // ディレクトリのみ使用。-1 は未確認、0 は減衰なし
   char* name;            // ファイル名 PSRAM配置
   char* pngName;         // ディレクトリ既定 or ファイル固有のpngファイル名 PSRAM配置
   Node* parent;          // 親ディレクトリ

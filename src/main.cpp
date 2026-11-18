@@ -157,6 +157,9 @@ void setup() {
     if (Leds.init()) {
       Leds.startupTest();
       Leds.setAll(0);
+      // Leds.set(8, 3);
+      // Leds.set(9, 3);
+      // Leds.set(10, 3);
       FM.refreshChannelMaskLeds();
     }
     cfgWindow.init();
@@ -191,6 +194,9 @@ void setup() {
   if (Leds.init()) {
     Leds.startupTest();
     Leds.setAll(0);
+    Leds.set(8, 3);
+    Leds.set(9, 3);
+    Leds.set(10, 3);
     FM.refreshChannelMaskLeds();
   }
 

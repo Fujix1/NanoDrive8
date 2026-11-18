@@ -68,7 +68,9 @@ void NJU72342::init(int SDA, int SCL, int CLOCK, u16_t fadeOutDuration, bool NJU
     _slaveAddress = NJU72342_ADDR;
     _isNJU72342 = false;
   }
-  _attenuation = 0;  // 音量調整値
+  _mainAttenuation = 0;
+  _folderAttenuation = 0;
+  _fadeAttenuation = 0;
 
   fadeOutStatus = FADEOUT_BEFORE;  // フェードアウトしてない
   _isFadeoutEnabled = (fadeOutDuration != FO_0);
@@ -152,16 +154,15 @@ void NJU72342::startMdxFadeout(u16_t length) {
   xTimerStart(hFadeOutTimer, 0);
 }
 
-// att 減衰量dB:
-void NJU72342::reset(u8_t att) {
-  _attenuation = att;
-  fadeOutStatus = FADEOUT_BEFORE;
+void NJU72342::reset(u8_t folderAttenuation) {
+  _folderAttenuation = folderAttenuation;
   resetFadeout();
 }
 
 void NJU72342::resetFadeout() {
   xTimerStop(hFadeOutTimer, 0);
   fadeOutStatus = FADEOUT_BEFORE;
+  _fadeAttenuation = 0;
   _fadeOutStep = 0;
   _activeFadeTable = NJU72342_db;
 }
@@ -182,11 +183,18 @@ void NJU72342::setInputGain(u8_t ch, tNJU7234X_GAIN newInputGain) {
 
 // メイン出力(ch3/ch4)の音量設定
 // 0:最大音量, 96: ミュート
-void NJU72342::setVolumeAll(u8_t newGain) { setVolume_3B_4B(newGain + _attenuation); }
+void NJU72342::setVolumeAll(u8_t newGain) {
+  setVolume_3B_4B(getOutputAttenuation(newGain));
+}
+
+u8_t NJU72342::getOutputAttenuation(u8_t extraAttenuation) const {
+  const int attenuation = _mainAttenuation + _folderAttenuation + extraAttenuation;
+  return attenuation > 96 ? 96 : attenuation;
+}
 
 void NJU72342::setMainAttenuation(u8_t att) {
-  _attenuation = (att > 96) ? 96 : att;
-  if (!_isMuted) setVolume_3B_4B(_attenuation);
+  _mainAttenuation = (att > 96) ? 96 : att;
+  if (!_isMuted) setVolumeAll(_fadeAttenuation);
 }
 
 void NJU72342::setVolume_3B_4B(u8_t newGain) {
@@ -244,14 +252,14 @@ void NJU72342::setVolume_4B(u8_t newGain) {
 
 void NJU72342::mute() {
   // Serial.printf("NJU72342::mute();\n");
-  setVolume_3B_4B(96);
   _isMuted = true;
+  setVolume_3B_4B(96);
 }
 
 void NJU72342::unmute() {
   // Serial.printf("NJU72342::unmute();\n");
-  setVolume_3B_4B(_attenuation);
   _isMuted = false;
+  setVolumeAll(_fadeAttenuation);
 }
 
 void NJU72342::panReset(u8_t att) {
@@ -354,7 +362,8 @@ void NJU72342::setAVolume(u8_t step) {
   if (step > FADEOUT_STEPS - 1) {
     step = FADEOUT_STEPS - 1;
   }
-  setVolume_3B_4B(_activeFadeTable[step] + _attenuation);
+  _fadeAttenuation = _activeFadeTable[step];
+  if (!_isMuted) setVolumeAll(_fadeAttenuation);
 }
 
 NJU72342 nju72342 = NJU72342();

@@ -24,7 +24,7 @@ class NJU72342 {
  public:
   tFadeOutStatus fadeOutStatus = FADEOUT_BEFORE;
   void init(int SDA, int SCL, int CLOCK, u16_t fadeOutDuration, bool NJU72342);
-  void reset(u8_t att);
+  void reset(u8_t folderAttenuation);
   void setInputGain(u8_t ch, tNJU7234X_GAIN newInputGain);
   void setVolume_3B_4B(u8_t newGain);  // ch3と4の音量設定
   void setVolume_3B(u8_t newGain);     // ch3の音量設定
@@ -49,11 +49,14 @@ class NJU72342 {
  private:
   void setPanVolume(u8_t gain1, u8_t gain2);
   void applyPanVolume();
+  u8_t getOutputAttenuation(u8_t extraAttenuation) const;
 
   bool _isMuted = false;
   bool _isPanMuted = false;
   u8_t _currentVolume[4] = {100, 100, 100, 100};  // 各チャンネルの音量
-  u8_t _attenuation = 0;                          // 音量調整値
+  u8_t _mainAttenuation = 0;
+  u8_t _folderAttenuation = 0;
+  u8_t _fadeAttenuation = 0;
   u8_t _panAttenuation = 0;
   tPan _pan = PAN_CENTER;
   u32_t _fadeoutStarted;                          // フェードアウト開始時間

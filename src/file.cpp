@@ -1,6 +1,7 @@
 #include "file.h"
 
 #include <PNGdec.h>
+#include <cJSON.h>
 #include <dirent.h>
 #include <esp_system.h>
 
@@ -280,8 +281,6 @@ bool initCache(String path) {
 //-------------------------------------------------------------------------
 
 bool NDFile::init() {
-  _att = 0;
-
   // セマフォ作成
   spFileOpen = xSemaphoreCreateBinary();
   xSemaphoreGive(spFileOpen);
@@ -993,6 +992,43 @@ bool NDFile::_playRandomAll(int count) {
   return _playNode(target);
 }
 
+// 曲の直上のフォルダにある設定だけを初回再生時に読む。
+static uint8_t getFolderAtt(Node* dir) {
+  if (!dir) return 0;
+  if (dir->folderAtt >= 0) return dir->folderAtt;
+
+  String path = fileTree.getFullPath(dir);
+  if (!path.endsWith("/")) path += '/';
+  File settings = SD.open(path + "setting.json");
+  if (!settings || settings.isDirectory()) {
+    dir->folderAtt = 0;
+    return 0;
+  }
+
+  char buffer[129];
+  const size_t length = settings.size();
+  if (length == 0 || length >= sizeof(buffer)) {
+    dir->folderAtt = 0;
+    return 0;
+  }
+  if (settings.read(reinterpret_cast<uint8_t*>(buffer), length) != length) return 0;
+  settings.close();
+  buffer[length] = '\0';
+
+  dir->folderAtt = 0;
+  if (memchr(buffer, '\0', length)) return 0;
+
+  const char* parseEnd = nullptr;
+  cJSON* document = cJSON_ParseWithLengthOpts(buffer, length + 1, &parseEnd, true);
+  const cJSON* att = cJSON_GetObjectItemCaseSensitive(document, "att");
+  if (cJSON_IsNumber(att) && att->valueint >= 0 && att->valueint <= 24 &&
+      att->valuedouble == att->valueint) {
+    dir->folderAtt = att->valueint;
+  }
+  cJSON_Delete(document);
+  return dir->folderAtt;
+}
+
 //----------------------------------------------------------------------
 // パスでファイルを開く
 // 戻り値: 成功/不成功
@@ -1005,9 +1041,6 @@ bool NDFile::openFile(String path) {
   nju72342.resetFadeout();
   ndConfig.saveNodePath(path);
 
-  // int lastSlash = path.lastIndexOf('/');
-  // String dirPath = (lastSlash > 0) ? path.substring(0, lastSlash) : "/";
-  // ndFile.getAttValueInDir(dirPath);
   nju72342.panMute();
 
   // 常時PLAY中のVGMから手動で曲を切り替える場合も、ミュート後に物理STOPする。
@@ -1020,7 +1053,6 @@ bool NDFile::openFile(String path) {
 
   // IC_HIGH;
 
-  // Serial.printf("Folder attenuation : %d dB\n", _att);
   if (xSemaphoreTake(spFileOpen, 0) != pdTRUE) {
     // Serial.printf("Semapho is already taken.\n");
     return false;
@@ -1029,6 +1061,7 @@ bool NDFile::openFile(String path) {
   FM.reset();
   ndConfig.flushLastView();
 
+  const uint8_t folderAtt = getFolderAtt(_getCurrentDirNode());
   ND::fileFormat = readFile(path);
 
   if (ND::fileFormat != FileFormat::MDX) {  // MDX->VGM->MDXのとき PDX 上書きされるので
@@ -1064,7 +1097,8 @@ bool NDFile::openFile(String path) {
     playerWindow.dispData.time = ndConfig.get(CFG_PAUSE) == HOLD_3SEC ? -3 : 0;
   }
 
-  nju72342.reset(_att);
+  ND::att = ND::canPlay ? folderAtt : 0;
+  nju72342.reset(ND::att);
   nju72342.panReset();
 
   xSemaphoreGive(spFileOpen);
@@ -1083,37 +1117,6 @@ bool NDFile::openFile(String path) {
   }
 
   return ND::canPlay;
-}
-
-//----------------------------------------------------------------------
-// 指定されたディレクトリ内の減衰指定 "att*" ファイルを調べて値を返す
-// 戻り値: 0 ~ 24
-void NDFile::getAttValueInDir(const String& dirPath) {
-  bool isDir;
-  _att = 0;
-
-  File dir = SD.open(dirPath);
-  if (!dir || !dir.isDirectory()) {
-    return;
-  }
-
-  while (1) {
-    String filePath = dir.getNextFileName(&isDir);
-    if (filePath == "") break;
-
-    if (!isDir) {
-      String fileName = filePath.substring(filePath.lastIndexOf("/") + 1);
-      if (fileName.startsWith("att")) {
-        String numberPart = fileName.substring(3);
-        u8_t value = numberPart.toInt();
-        if (value > 0 && value <= 24) {
-          _att = value;
-        }
-      }
-    }
-  }
-  dir.close();
-  return;
 }
 
 //----------------------------------------------------------------------
