@@ -1,4 +1,4 @@
-﻿"""Small Windows launcher for the MAME/NanoDrive bridge."""
+"""Small Windows launcher for the MAME/NanoDrive bridge."""
 import queue
 import configparser
 import os
@@ -32,7 +32,7 @@ def load_settings(path=SETTINGS_PATH):
         return 'ND6', 'COM5', str(exc)
     device = config.get('bridge', 'device', fallback='ND6').upper()
     port = config.get('bridge', 'port', fallback='COM5').strip()
-    return (device if device in ('ND6', 'ND8') else 'ND6'), port, None
+    return (device if device in ('ND6', 'ND7', 'ND8') else 'ND6'), port, None
 
 
 def save_settings(device, port, path=SETTINGS_PATH):
@@ -89,7 +89,7 @@ class App:
         frame = ttk.Frame(root, padding=12); frame.pack(fill='both', expand=True)
         settings = ttk.Frame(frame); settings.pack(fill='x')
         ttk.Label(settings, text='機器').pack(side='left')
-        self.device_choice = ttk.Combobox(settings, textvariable=self.device, values=('ND6', 'ND8'), state='readonly', width=7)
+        self.device_choice = ttk.Combobox(settings, textvariable=self.device, values=('ND6', 'ND7', 'ND8'), state='readonly', width=7)
         self.device_choice.pack(side='left', padx=(5, 16))
         self.device_choice.bind('<<ComboboxSelected>>', self.selection_changed)
         ttk.Label(settings, text='COM ポート').pack(side='left')

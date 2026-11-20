@@ -17,6 +17,15 @@ import xml.etree.ElementTree as ET
 import serial
 
 LISTEN_PORT = 32151
+DEFAULT_PORTS = {'nd6': 'COM5', 'nd7': 'COM5', 'nd8': 'COM3'}
+ND7_CHIPS = {
+    0x51: ('YM2413', ('ym2413',)),
+    0x55: ('YM2203', ('ym2203',)),
+    0x5a: ('YM3812', ('ym3812',)),
+    0x5b: ('YM3526', ('ym3526',)),
+    0x5e: ('YMF262', ('ymf262',)),
+    0xa0: ('AY-3-8910', ('ay8910', 'ay8912', 'ay8913', 'ym2149')),
+}
 
 
 def cobs_encode(data):
@@ -124,12 +133,18 @@ class NDSIF:
                 self.rx = bytearray(remaining)
                 if not part:
                     continue
-                raw = cobs_decode(part)
-                if len(raw) < 11 or binascii.crc_hqx(raw[:-2], 0xffff) != int.from_bytes(raw[-2:], 'little'):
-                    raise ValueError('invalid response CRC or length')
-                magic, version, kind, cmd, tx, length = struct.unpack('<2sBBBHH', raw[:9])
-                if magic != b'ND' or version != 1 or kind != 2 or len(raw) != 11 + length:
-                    raise ValueError('invalid response header')
+                try:
+                    raw = cobs_decode(part)
+                    if len(raw) < 11 or binascii.crc_hqx(raw[:-2], 0xffff) != int.from_bytes(raw[-2:], 'little'):
+                        raise ValueError('invalid response CRC or length')
+                    magic, version, kind, cmd, tx, length = struct.unpack('<2sBBBHH', raw[:9])
+                    if magic != b'ND' or version != 1 or kind != 2 or len(raw) != 11 + length:
+                        raise ValueError('invalid response header')
+                except ValueError:
+                    # ND7 can print boot diagnostics before its first NDSIF frame.
+                    if self.device == 'nd7' and command == 2:
+                        continue
+                    raise
                 if cmd == command and tx == expected_transaction:
                     result = raw[9:-2]
                     if not result or result[0] != 0:
@@ -181,6 +196,19 @@ class NDSIF:
             raise RuntimeError('ND6 firmware does not support NDSIF live DAC profile 2; update the firmware')
         if ordered and not (common_features & 8):
             raise RuntimeError('ND6 firmware does not support ordered live YM profile 3; update the firmware')
+        self.max_pairs = min(127, (max_payload - 2) // 2)
+        self.max_payload = max_payload
+        if self.device == 'nd7':
+            if name != 'NanoDrive 7':
+                raise RuntimeError(f'expected NanoDrive 7, got {name}')
+            self.register_caps = {tuple(e[:3]): e for e in entries if e[3] & 1}
+            if not any(write_id in ND7_CHIPS for write_id, _, _ in self.register_caps):
+                raise RuntimeError('ND7 register BURST unavailable')
+            if self.volume_supported:
+                self.request(3, b'\x00')
+            print('ND7 register burst ready', flush=True)
+            return
+
         chip_id = 0x52 if self.device == 'nd6' else 0x54
         clock_hz = 7670454 if self.device == 'nd6' else 4000000
         targets = [(0x52, 0), (0x53, 1)] if self.device == 'nd6' else [(0x54, 0)]
@@ -253,8 +281,6 @@ class NDSIF:
             raise RuntimeError(f'chip clock is unknown or incompatible with {clock_hz} Hz')
         if ordered and self.ordered_psg:
             self.set_psg_clock(3579545)
-        self.max_pairs = min(127, (max_payload - 2) // 2)
-        self.max_payload = max_payload
         if self.volume_supported:
             self.request(3, b'\x00')
         else:
@@ -271,12 +297,9 @@ class NDSIF:
         elif chip[4] != 1 or int.from_bytes(chip[5:9], 'little') != hz:
             raise RuntimeError(f'PSG clock is incompatible with {hz} Hz')
 
-    def writes(self, pairs, page=0):
-        write_id = (0x52 + page) if self.device == 'nd6' else 0x54
-        if page not in ((0, 1) if self.device == 'nd6' else (0,)):
-            raise ValueError('unsupported register page')
+    def register_burst(self, write_id, instance, page, pairs):
         for i in range(0, len(pairs), self.max_pairs * 2):
-            self.send(write_id, bytes((0, page)) + pairs[i:i + self.max_pairs * 2])
+            self.send(write_id, bytes((instance, page)) + pairs[i:i + self.max_pairs * 2])
 
 
 def receive(conn, size, stop_event=None):
@@ -892,9 +915,9 @@ def mame_executable(pid):
     return result
 
 
-def mame_ym2151_clock(pid, machine, tag):
-    if not re.fullmatch(r'[a-z0-9_]+', machine) or not tag.startswith(':'):
-        raise ValueError('invalid MAME machine name or YM2151 tag')
+def mame_machine_xml(pid, machine):
+    if not re.fullmatch(r'[a-z0-9_]+', machine):
+        raise ValueError('invalid MAME machine name')
     executable = mame_executable(pid)
     try:
         result = subprocess.run([str(executable), '-noreadconfig', '-listxml', machine],
@@ -906,31 +929,137 @@ def mame_ym2151_clock(pid, machine, tag):
     system = next((item for item in root.findall('machine') if item.get('name') == machine), None)
     if system is None:
         raise ValueError(f'MAME XML has no machine {machine}')
+    return system
+
+
+def mame_chip_info(system, tag, types, label):
+    if not tag.startswith(':'):
+        raise ValueError(f'invalid MAME {label} tag')
     refs = [item for item in system.findall('device_ref')
-            if item.get('tag', '').lstrip(':') == tag.lstrip(':') and item.get('name') == 'ym2151']
+            if item.get('tag', '').lstrip(':') == tag.lstrip(':') and item.get('name') in types]
     chips = [item for item in system.findall('chip')
              if item.get('type') == 'audio' and item.get('tag', '').lstrip(':') == tag.lstrip(':')]
     if len(refs) != 1 or len(chips) != 1 or not chips[0].get('clock', '').isdigit():
-        raise ValueError(f'MAME XML has no unambiguous YM2151 clock for {tag}')
+        raise ValueError(f'MAME XML has no unambiguous {label} clock for {tag}')
     hz = int(chips[0].get('clock'))
     if not 0 < hz <= 0xffffffff:
-        raise ValueError('invalid YM2151 clock')
+        raise ValueError(f'invalid {label} clock')
+    return hz, refs[0].get('name')
+
+
+def mame_ym2151_clock(pid, machine, tag):
+    hz, _ = mame_chip_info(mame_machine_xml(pid, machine), tag, ('ym2151',), 'YM2151')
     return hz
 
 
-def nd8_connection(nd, conn, *, stop_event=None):
+def configure_nd7(nd, payload, clock_cache):
+    pid, game_len = struct.unpack_from('<IB', payload)
+    end = 5 + game_len
+    game = payload[5:end].decode('ascii')
+    if end >= len(payload):
+        raise ValueError('ND7 initialization has no chip routes')
+    key = (pid, game)
+    if key not in clock_cache:
+        clock_cache[key] = mame_machine_xml(pid, game)
+    system = clock_cache[key]
+
+    declared, enabled, clocks = set(), set(), {}
+    while end < len(payload):
+        if len(payload) - end < 3:
+            raise ValueError('incomplete ND7 chip route')
+        write_id, instance_byte, tag_len = payload[end:end + 3]
+        divide_clock = bool(instance_byte & 0x80)
+        instance = instance_byte & 0x7f
+        start, end = end + 3, end + 3 + tag_len
+        target = (write_id, instance, 0)
+        if end > len(payload) or target in declared or write_id not in ND7_CHIPS:
+            raise ValueError('invalid ND7 chip route')
+        declared.add(target)
+        tag = payload[start:end].decode('ascii')
+        label, types = ND7_CHIPS[write_id]
+        routes = {target}
+        if write_id == 0x5e:
+            routes.add((0x5f, instance, 1))
+        if not routes <= nd.register_caps.keys():
+            print(f'ND7: {label} {tag} register BURST unavailable', file=sys.stderr, flush=True)
+            continue
+
+        chip = nd.register_caps[target]
+        try:
+            hz, chip_type = mame_chip_info(system, tag, types, label)
+            if divide_clock and chip_type != 'ym2149':
+                raise ValueError('only YM2149 supports the SEL clock divider')
+            if chip_type == 'ym2149':
+                label = 'YM2149'
+                if divide_clock:
+                    hz //= 2
+            if write_id in (0x55, 0xa0):
+                slot, physical_hz = 0, hz * (2 if write_id == 0xa0 else 1)
+                if physical_hz == 3993600:
+                    physical_hz = 4000000
+            elif write_id in (0x5a, 0x5b, 0x5e):
+                slot, physical_hz = 1, hz * (1 if write_id == 0x5e else 4)
+            else:
+                slot, physical_hz = None, hz
+
+            if slot == 0 and 3579000 <= physical_hz <= 3580000:
+                physical_hz = 3579545
+            if slot == 1 and 14316000 <= physical_hz <= 14320000:
+                physical_hz = 14318180
+            if slot in clocks and clocks[slot] != physical_hz:
+                raise ValueError(f'{hz} Hz would change the shared CLK{slot} already in use')
+            if chip[4] == 2 and chip[3] & 4:
+                if slot not in clocks:
+                    nd.request(4, struct.pack('<BBI', write_id, instance, hz))
+            else:
+                fixed_hz = int.from_bytes(chip[5:9], 'little')
+                if chip[4] != 1 or not (hz == fixed_hz or
+                        write_id == 0x51 and 3579000 <= hz <= 3580000 and 3579000 <= fixed_hz <= 3580000):
+                    raise ValueError(f'{hz} Hz is incompatible with the advertised clock ({fixed_hz} Hz)')
+        except (ValueError, RuntimeError) as exc:
+            print(f'ND7: {label} {tag} skipped: {exc}', file=sys.stderr, flush=True)
+            continue
+
+        if slot is not None:
+            clocks[slot] = physical_hz
+        enabled.update(routes)
+        print(f'ND7 {label} instance {instance}: {hz} Hz ({game}, {tag})', flush=True)
+    return enabled
+
+
+def register_connection(nd, conn, *, stop_event=None):
     pending = bytearray()
     count = 0
     clock_cache = {}
+    nd7_targets = set()
+    is_nd7 = nd.device == 'nd7'
+    model = nd.device.upper()
     while True:
         data = receive(conn, 8192, stop_event)
         if not data:
             return
         pending.extend(data)
         pairs = bytearray()
+        target = (0x54, 0, 0)
         while pending:
             op = pending[0]
-            if op == ord('I'):
+            if is_nd7 and op == ord('J'):
+                # Payload is PID, length-prefixed machine name, and chip ID /
+                # instance / length-prefixed device tag for each source chip.
+                if len(pending) < 3:
+                    break
+                size = 3 + int.from_bytes(pending[1:3], 'little')
+                if not 9 <= size <= 2048:
+                    raise ValueError('invalid ND7 initialization length')
+                if len(pending) < size:
+                    break
+                if pairs:
+                    nd.register_burst(*target, pairs)
+                    pairs.clear()
+                nd7_targets = configure_nd7(nd, pending[3:size], clock_cache)
+                del pending[:size]
+                continue
+            if not is_nd7 and op == ord('I'):
                 if len(pending) < 7:
                     break
                 pid, game_len, tag_len = struct.unpack_from('<IBB', pending, 1)
@@ -938,7 +1067,7 @@ def nd8_connection(nd, conn, *, stop_event=None):
                 if len(pending) < size:
                     break
                 if pairs:
-                    nd.writes(pairs)
+                    nd.register_burst(*target, pairs)
                     pairs.clear()
                 game = bytes(pending[7:7 + game_len]).decode('ascii')
                 tag = bytes(pending[7 + game_len:size]).decode('ascii')
@@ -959,7 +1088,21 @@ def nd8_connection(nd, conn, *, stop_event=None):
                     raise RuntimeError(f'YM2151 clock is incompatible with {hz} Hz')
                 print(f'ND8 YM2151 clock requested: {hz} Hz ({game}, {tag})', flush=True)
                 continue
-            if op == ord('W'):
+            if is_nd7 and op == ord('V'):
+                if len(pending) < 5:
+                    break
+                write_id, instance = pending[1:3]
+                route = (write_id, instance, int(write_id == 0x5f))
+                if route in nd7_targets:
+                    if pairs and target != route:
+                        nd.register_burst(*target, pairs)
+                        pairs.clear()
+                    target = route
+                    pairs.extend(pending[3:5])
+                    count += 1
+                del pending[:5]
+                continue
+            if not is_nd7 and op == ord('W'):
                 if len(pending) < 3:
                     break
                 pairs.extend(pending[1:3])
@@ -967,41 +1110,41 @@ def nd8_connection(nd, conn, *, stop_event=None):
                 count += 1
                 continue
             if pairs:
-                nd.writes(pairs)
+                nd.register_burst(*target, pairs)
                 pairs.clear()
             del pending[0]
             if op == ord('R'):
                 nd.request(0)
-                print('ND8 reset', flush=True)
+                print(f'{model} reset', flush=True)
             elif op == ord('P'):
                 if nd.volume_supported:
                     nd.request(3, b'\x60')
-                    print('Paused: ND8 muted', flush=True)
+                    print(f'Paused: {model} muted', flush=True)
                 else:
-                    print('Paused: ND8 has no output mute', flush=True)
+                    print(f'Paused: {model} has no output mute', flush=True)
             elif op == ord('U'):
                 if nd.volume_supported:
                     nd.request(3, b'\0')
-                    print('Resumed: ND8 unmuted', flush=True)
+                    print(f'Resumed: {model} unmuted', flush=True)
             elif op == ord('Q'):
                 print(f'MAME stopped; {count} register writes', flush=True)
                 return
             else:
                 raise ValueError(f'unknown or incompatible MAME plugin command {op:02x}')
         if pairs:
-            nd.writes(pairs)
+            nd.register_burst(*target, pairs)
 
 
 def run(port, device='nd8', *, stop_event=None, once=False):
     stop_event = stop_event or threading.Event()
-    if device != 'nd8':
+    if device not in ('nd7', 'nd8'):
         raise ValueError('use run_live for the ND6 live DAC profile')
     nd = NDSIF(port, device)
     initialized = False
     try:
         nd.setup()
         initialized = True
-        serve_sessions(nd, lambda conn: nd8_connection(nd, conn, stop_event=stop_event), stop_event=stop_event, once=once)
+        serve_sessions(nd, lambda conn: register_connection(nd, conn, stop_event=stop_event), stop_event=stop_event, once=once)
     finally:
         if initialized:
             try:
@@ -1013,8 +1156,8 @@ def run(port, device='nd8', *, stop_event=None, once=False):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('--port', default=None, help='serial port (ND6: COM5, ND8: COM3)')
-    parser.add_argument('--device', choices=('nd8', 'nd6'), default='nd6')
+    parser.add_argument('--port', default=None, help='serial port (ND6: COM5, ND7: COM5, ND8: COM3)')
+    parser.add_argument('--device', choices=DEFAULT_PORTS, default='nd6')
     parser.add_argument('--batch-ms', type=float, default=5.0,
                         help='ND6 input batching deadline in milliseconds (0 to 25; default 5)')
     parser.add_argument('--batch-events', type=int, default=100,
@@ -1033,7 +1176,7 @@ if __name__ == '__main__':
                         help='experimental ordered startup and PCM-phrase prefill (0 to 25 ms; default 0)')
     args = parser.parse_args()
     if args.port is None:
-        args.port = 'COM5' if args.device == 'nd6' else 'COM3'
+        args.port = DEFAULT_PORTS[args.device]
     if not 0 <= args.batch_ms <= 25:
         parser.error('--batch-ms must be between 0 and 25')
     if not 1 <= args.batch_events <= 256:

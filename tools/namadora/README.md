@@ -38,6 +38,26 @@ ND6 を NDSIF モードにします。順序付き PSG の転送には firmware 
 
 リセット時には ND6 をリセットし、対応機ではポーズ中に出力をミュートします。キューが空になった場合は到着を待ちます。MAME の速度、USB や実チップの処理負荷による音の遅れや乱れは残り得ます。セーブステートや途中接続からの状態復元には対応していません。
 
+## ND7 への即時レジスタ転送
+
+ND7 の設定で「動作モード」を「シリアル」に変更し、再起動後にブリッジの機器を ND7 に設定します。MAME の `plugins` フォルダーへ `plugins/nanodrive7` を配置してください。
+
+```powershell
+python .\bridge.py --device nd7 --port COM5
+```
+
+CLI の ND7 既定ポートは COM5 です。接続先の COM 番号に合わせて変更してください。ブリッジ起動後、MAME フォルダーを別の PowerShell で開いて実行します。
+
+```powershell
+.\mame.exe 1943 -noreadconfig -rompath 'roms;software' -plugins -plugin nanodrive7 -video gdi -window
+```
+
+対象音源は YM2203（最大 2 基）、YM2413、YMF262、YM3812、YM3526、AY-3-8910 系（AY8910 / AY8912 / AY8913）、YM2149 です。AY 系と YM2149 は空いている YM2203 の SSG、YM3812 / YM3526 は YMF262 の互換モードを使います。MAME の直接書き込みマップから転送先を特定できる構成に対応します。複数の同種音源は、転送先タグが判別できる場合に対応します。MAME がタグを返さない場合も、`lkage`、`1943`、`gng`、`blktiger`、`commando`、`gunsmoke`、`lwings`、`sidearms`、`tigeroad` 系では確認済みのアドレスマップに従って YM2203 2 基に振り分けます。
+
+ND8 の YM2151 と同様に、MAME の書き込みを Lua のタップで捕捉し、到着順の即時 BURST で送ります。ブリッジは連続する同じ送信先の書き込みをまとめます。例えば `deroon` では YMF262 の 2 ページを ND7 に転送し、YMZ280B と OKI の PCM・ADPCM は MAME 側で再生します。
+
+クロックは同じ MAME 実行ファイルの `-listxml` から取得します。YM2149 は起動とリセット時に SEL を読み、Low なら入力クロックを半分にしてから ND7 に要求します。共有クロックが先に割り当てた音源と両立しない場合や、ND7 が要求周波数に対応していない場合は、その音源をスキップしログに表示します。起動とリセット時に ND7 をリセットし、対応ファームウェアではポーズ中にミュートします。
+
 ## Sega System 16A / 16B → ND8
 
 ND8 を NDSIF モードにして画面の機器を ND8 に変更するか、`bridge.py` のあるフォルダーから以下で起動します。
