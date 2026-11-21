@@ -522,11 +522,13 @@ static void drawPreparedPlayerLabels() {
 }
 
 static String getVisualSongTitle(const tDispData& data) {
+  const bool isJapanese = ndConfig.get(CFG_LANG) == LANG_JA;
   if (ND::currentMode == MODE_SERIAL) {
-    return "NDSIF / シリアルモード";
+    const char* title = isJapanese ? "シリアルモード / NDSIF v" : "Serial Mode / NDSIF v";
+    return String(title) + ndsif::VERSION;
   }
   String songTitle;
-  if (ndConfig.get(CFG_LANG) == LANG_JA) {
+  if (isJapanese) {
     songTitle = data.trackJp;
     if ((ND::fileFormat == FileFormat::VGM || ND::fileFormat == FileFormat::VGZ) &&
         data.gameJp != "") {

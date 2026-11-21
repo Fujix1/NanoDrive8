@@ -9,7 +9,21 @@
 #include "okim6258.h"
 #include "unlz.h"
 
+// Arduino-ESP32 caps the SD data clock at 25 MHz after 400 kHz initialization.
+static constexpr uint32_t kSdDriverClockLimitHz = 25000000;
+static constexpr uint32_t kSdTransferClockHz = 40000000;
 static SPIClass SPI_SD;
+
+extern "C" void __real__ZN8SPIClass16beginTransactionE11SPISettings(SPIClass* spi,
+                                                                    SPISettings settings);
+
+extern "C" void __wrap__ZN8SPIClass16beginTransactionE11SPISettings(SPIClass* spi,
+                                                                    SPISettings settings) {
+  if (spi == &SPI_SD && settings._clock == kSdDriverClockLimitHz) {
+    settings._clock = kSdTransferClockHz;
+  }
+  __real__ZN8SPIClass16beginTransactionE11SPISettings(spi, settings);
+}
 
 static File hFile;
 
@@ -289,7 +303,7 @@ bool NDFile::init() {
   SPI_SD.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
   int n = 0;
   lcd.print("Checking SD card");
-  while (!SD.begin(SD_CS, SPI_SD, 80000000)) {  // SD マウント試行 @ 80MHz
+  while (!SD.begin(SD_CS, SPI_SD, kSdTransferClockHz)) {  // SD マウント試行
     vTaskDelay(200);
     n++;
     lcd.print(".");
