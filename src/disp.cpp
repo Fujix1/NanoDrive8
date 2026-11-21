@@ -2195,6 +2195,19 @@ void VisualWindow::draw() {
   disp.stopTimerDrawing = false;  // タイマー更新再開, タイマー側のupdateイベントが先に起こるので
 }
 
+static tPan getYm2151DisplayPan(u8_t reg) {
+  switch (reg & 0xc0) {
+    case 0x40:
+      return PAN_RIGHT;
+    case 0x80:
+      return PAN_LEFT;
+    case 0xc0:
+      return PAN_CENTER;
+    default:
+      return PAN_MUTE;
+  }
+}
+
 // 更新処理
 void VisualWindow::update() {
   // キー情報更新
@@ -2245,10 +2258,7 @@ void VisualWindow::update() {
           const int n = int(roundf(semitone));
           if (n >= 12) keySnapshot[YM2151][ch] = {n / 12, n % 12};
         }
-        panSnapshot[ch] = (pan & 0xc0) == 0xc0 ? PAN_CENTER
-                          : (pan & 0x80)       ? PAN_LEFT
-                          : (pan & 0x40)       ? PAN_RIGHT
-                                               : PAN_MUTE;
+        panSnapshot[ch] = getYm2151DisplayPan(pan);
         panSnapshot[ch + 8] = PAN_MUTE;  // Raw ADPCM carries no note/channel metadata.
         for (int op = 0; op < 4; ++op) {
           if (slots & carriers[pan & 7] & (1 << op)) {
@@ -2261,6 +2271,11 @@ void VisualWindow::update() {
 
     if (ND::currentMode == MODE_SERIAL) {
       panSnapshot[8] = static_cast<tPan>(SerialAudio::displayPan());
+    } else if (ND::fileFormat == FileFormat::VGM || ND::fileFormat == FileFormat::VGZ) {
+      for (int ch = 0; ch < 8; ++ch) {
+        const u8_t pan = FM.visualPitch[ch].load(std::memory_order_relaxed) >> 24;
+        panSnapshot[ch] = getYm2151DisplayPan(pan);
+      }
     }
 
     for (int i = 0; i < 8; i++) {

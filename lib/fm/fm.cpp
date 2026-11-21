@@ -25,7 +25,7 @@ static inline bool isYm2151PanRegister(byte addr) {
   return addr >= 0x20 && addr <= 0x27;
 }
 
-static inline byte invertYm2151Pan(byte data) {
+byte FMChip::invertYm2151Pan(byte data) {
   const byte bit6 = (data >> 6) & 0x01;
   const byte bit7 = (data >> 7) & 0x01;
   return (data & 0x3F) | (bit6 << 7) | (bit7 << 6);

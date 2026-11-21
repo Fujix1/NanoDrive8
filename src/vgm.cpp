@@ -1053,6 +1053,10 @@ void VGM::vgmProcessMain() {
 #ifdef USE_YM2151
       if (reg != 0x10 && reg != 0x11 && reg != 0x12) {  // タイマー設定は無効
 
+        // VGM と NanoDrive 8 の出力では YM2151 の左右ビットの割り当てが逆。
+        if (reg >= 0x20 && reg <= 0x27) {
+          dat = FMChip::invertYm2151Pan(dat);
+        }
         FM.setRegisterOPM(reg, dat, 0);
         if (reg == 0x08) {  // キーオンオフ
           int ch = dat & 0x07;
@@ -1071,22 +1075,6 @@ void VGM::vgmProcessMain() {
           int ch = reg & 0x07;
           if (FM.ym2151_iskeyOn[ch]) {
             KeyBoard.set(YM2151, ch, freqToNote(_getYM2151Freq(ch)));
-          }
-        } else if (reg >= 0x20 && reg <= 0x27) {
-          int ch = reg - 0x20;
-          switch (dat & 0xC0) {
-            case 0x40:
-              KeyBoard.trackPan[ch] = PAN_RIGHT;
-              break;
-            case 0x80:
-              KeyBoard.trackPan[ch] = PAN_LEFT;
-              break;
-            case 0xC0:
-              KeyBoard.trackPan[ch] = PAN_CENTER;
-              break;
-            default:
-              KeyBoard.trackPan[ch] = PAN_MUTE;
-              break;
           }
         }
       }

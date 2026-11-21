@@ -55,6 +55,7 @@ class FMChip {
   void reset();
   void setRegister(byte addr, byte value, int chipno);
   void setRegisterOPM(byte addr, byte value, u8_t chipno, boolean temp = false);
+  static byte invertYm2151Pan(byte data);
   void setRegisterOPL3(byte port, byte addr, byte data, int chipno);
   void setYM2612(byte port, byte addr, byte data, u8_t chipno);
   void setYM2612DAC(byte data, u8_t chipno);
