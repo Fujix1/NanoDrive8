@@ -97,11 +97,12 @@ class VGM {
 
     // F-Numberが0の場合は周波数を0と見なす
     if (f_number == 0) {
-      return 0.0;
+      return 0.0f;
     }
 
     // 周波数計算の式: f_note = F-Number * φM / (144 * 2^(21-Block))
-    return (float)f_number * ND::freq[0] * _ym2203_FM_prescaler / (144.0 * pow(2.0, 21.0 - block));
+    const uint32_t divisor = 144u * (1u << (21 - block));
+    return (float)f_number * ND::freq[0] * _ym2203_FM_prescaler / divisor;
   }
 
   // YM2151 周波数取得

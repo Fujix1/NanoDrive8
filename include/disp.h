@@ -249,7 +249,7 @@ class Panel {
   u16_t _maxBarHeight;
   u8_t _borderRadius;
 
-  u16_t _innerHeight = 0;
+  int32_t _innerHeight = 0;
   int _itemCount = 0;
   int _itemHeight = 0;  // 項目の高さ
   int _prevCurrentIndex = -1;

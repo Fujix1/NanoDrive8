@@ -16,9 +16,9 @@ NoteInfo freqToNote(float freq) {
   if (freq <= 0) return {0, 0};
 
   // A4 = 440Hz を基準
-  float n = 12.0 * log2(freq / 440.0);
+  const float n = 12.0f * log2f(freq / 440.0f);
   // A=9 に合わせる
-  int noteIndexFromC0 = (int)round(n) + 57;
+  int noteIndexFromC0 = (int)roundf(n) + 57;
 
   if (noteIndexFromC0 < 12) {  // 音域外, C1未満
     return {0, 0};

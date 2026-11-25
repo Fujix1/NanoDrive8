@@ -19,8 +19,9 @@ String ND::formatChipName(si5351Freq_t freq, t_chip chip) {
   char buf[10];
 
   if (freq != SI5351_UNDEFINED) {
-    snprintf(buf, sizeof(buf), "%.4f", (double)freq / 1000000.0);
-    buf[5] = '\0';
+    const unsigned int rounded100Hz = (static_cast<unsigned int>(freq) + 50u) / 100u;
+    snprintf(buf, sizeof(buf), "%u.%04u", rounded100Hz / 10000u, rounded100Hz % 10000u);
+    buf[5] = '\0';  // 周波数表示は先頭5文字まで。
     return CHIP_LABEL[chip] + " @ " + buf + " MHz";
   }
   return CHIP_LABEL[chip];

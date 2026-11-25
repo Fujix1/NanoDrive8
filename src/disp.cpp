@@ -590,10 +590,13 @@ void Panel::drawScrollbar() {
   // スクロールバー背景描画
   _spriteScrollBarBG.pushSprite(&_spriteScrollBar, 0, 0);
   if (_innerHeight > height) {
-    u16_t barHeight = _maxBarHeight * height / _innerHeight;
-    u16_t barTop = (_maxBarHeight * scrollTop) / _innerHeight;
+    const int32_t proportionalHeight = _maxBarHeight * height / _innerHeight;
+    const int32_t barHeight = proportionalHeight > 0 ? proportionalHeight : 1;
+    const int32_t barTop =
+        static_cast<int64_t>(_maxBarHeight - barHeight) * scrollTop / (_innerHeight - height);
+    const int32_t radius = _borderRadius < barHeight / 2 ? _borderRadius : barHeight / 2;
     _spriteScrollBar.fillRoundRect(PADDING, INDICATORHEIGHT + barTop, SCROLLBARWIDTH - PADDING * 2,
-                                   barHeight, _borderRadius, C_MID);
+                                   barHeight, radius, C_MID);
   }
 }
 
