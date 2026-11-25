@@ -68,8 +68,7 @@ void NJU72342::init(int SDA, int SCL, int CLOCK, u16_t fadeOutDuration, bool NJU
     _slaveAddress = NJU72342_ADDR;
     _isNJU72342 = false;
   }
-  _mainAttenuation = 0;
-  _folderAttenuation = 0;
+  _mainAttenuation = kDefaultAttenuation;
   _fadeAttenuation = 0;
 
   fadeOutStatus = FADEOUT_BEFORE;  // フェードアウトしてない
@@ -154,8 +153,8 @@ void NJU72342::startMdxFadeout(u16_t length) {
   xTimerStart(hFadeOutTimer, 0);
 }
 
-void NJU72342::reset(u8_t folderAttenuation) {
-  _folderAttenuation = folderAttenuation;
+void NJU72342::reset(int8_t folderVolume) {
+  _mainAttenuation = kDefaultAttenuation - folderVolume;
   resetFadeout();
 }
 
@@ -188,7 +187,7 @@ void NJU72342::setVolumeAll(u8_t newGain) {
 }
 
 u8_t NJU72342::getOutputAttenuation(u8_t extraAttenuation) const {
-  const int attenuation = _mainAttenuation + _folderAttenuation + extraAttenuation;
+  const int attenuation = _mainAttenuation + extraAttenuation;
   return attenuation > 96 ? 96 : attenuation;
 }
 

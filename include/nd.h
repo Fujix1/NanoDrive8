@@ -4,7 +4,7 @@
 #ifndef ND_H
 #define ND_H
 
-#define ND_FIRMWARE_VERSION "1.0.7"
+#define ND_FIRMWARE_VERSION "1.0.8"
 
 #include <Arduino.h>
 
@@ -57,7 +57,6 @@ class ND {
   static FileFormat fileFormat;  //
   static bool canPlay;           // ファイル処理可能
   static bool isPaused;          // 再生ホールド中
-  static uint8_t att;            // 再生中のフォルダの減衰量（dB）
 
   // クロック出力 3ch
   static std::array<si5351Freq_t, 3> freq;

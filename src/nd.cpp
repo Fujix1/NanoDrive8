@@ -5,7 +5,6 @@ tMode ND::currentMode = MODE_PLAYER;
 FileFormat ND::fileFormat = FileFormat::Unknown;
 bool ND::canPlay = false;
 bool ND::isPaused = false;
-uint8_t ND::att = 0;
 
 std::array<si5351Freq_t, 3> ND::freq = {SI5351_UNDEFINED, SI5351_UNDEFINED, SI5351_UNDEFINED};
 

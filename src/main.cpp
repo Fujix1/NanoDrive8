@@ -184,11 +184,10 @@ void setup() {
                 heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
   //
 
-  if (fileTree.begin("/")) {
-    // lcd.printf("Files OK. %d\n", fileTree.getTotalFiles());
-  } else {
-    lcd.printf("[ERROR] No music file.\n");
-    exit;
+  if (!fileTree.begin("/")) {
+    lcd.println("[ERROR] Not enough memory to scan SD.");
+    Serial.println("[ERROR] Not enough memory to scan SD.");
+    vTaskSuspend(nullptr);
   }
 
   if (Leds.init()) {

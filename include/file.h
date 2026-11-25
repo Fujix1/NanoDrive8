@@ -141,7 +141,7 @@ enum NodeType : u8_t { NODE_TYPE_DIR, NODE_TYPE_FILE };
 // ファイルノード
 struct Node {
   NodeType type;
-  int8_t folderAtt = -1;  // ディレクトリのみ使用。-1 は未確認、0 は減衰なし
+  int8_t folderVolume = INT8_MIN;  // ディレクトリの相対音量（dB）。INT8_MIN は未確認
   char* name;            // ファイル名 PSRAM配置
   char* pngName;         // ディレクトリ既定 or ファイル固有のpngファイル名 PSRAM配置
   Node* parent;          // 親ディレクトリ
@@ -215,7 +215,15 @@ class FileTree {
       Node* parent);  // 再帰的にディレクトリを走査し、有効なファイルがある場合のみノードを作成
   bool _isTargetFile(const char* filename);  // 指定されたファイル名が対象（.vgm, .vgz, .mdx）か判定
   char* _ps_strdup(const char* s);           // PSRAM用文字列コピー
-  void _deleteTree(Node* node);              // メモリ解放（デストラクタ用）
+  struct Block;
+  Block* _block = nullptr;
+  size_t _used = 0;
+  bool _allocationFailed = false;
+  void* _allocate(size_t size, size_t alignment);
+  Node* _makeNode(const char* name);
+  void _rewind(Block* block, size_t used);
+  FileTree(const FileTree&) = delete;
+  FileTree& operator=(const FileTree&) = delete;
 };
 
 extern FileTree fileTree;

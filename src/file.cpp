@@ -1,5 +1,9 @@
 #include "file.h"
 
+#include <memory>
+#include <new>
+#include <type_traits>
+
 #include <PNGdec.h>
 #include <cJSON.h>
 #include <dirent.h>
@@ -1007,40 +1011,40 @@ bool NDFile::_playRandomAll(int count) {
 }
 
 // 曲の直上のフォルダにある設定だけを初回再生時に読む。
-static uint8_t getFolderAtt(Node* dir) {
+static int8_t getFolderVolume(Node* dir) {
   if (!dir) return 0;
-  if (dir->folderAtt >= 0) return dir->folderAtt;
+  if (dir->folderVolume != INT8_MIN) return dir->folderVolume;
 
   String path = fileTree.getFullPath(dir);
   if (!path.endsWith("/")) path += '/';
   File settings = SD.open(path + "setting.json");
   if (!settings || settings.isDirectory()) {
-    dir->folderAtt = 0;
+    dir->folderVolume = 0;
     return 0;
   }
 
   char buffer[129];
   const size_t length = settings.size();
   if (length == 0 || length >= sizeof(buffer)) {
-    dir->folderAtt = 0;
+    dir->folderVolume = 0;
     return 0;
   }
   if (settings.read(reinterpret_cast<uint8_t*>(buffer), length) != length) return 0;
   settings.close();
   buffer[length] = '\0';
 
-  dir->folderAtt = 0;
+  dir->folderVolume = 0;
   if (memchr(buffer, '\0', length)) return 0;
 
   const char* parseEnd = nullptr;
   cJSON* document = cJSON_ParseWithLengthOpts(buffer, length + 1, &parseEnd, true);
-  const cJSON* att = cJSON_GetObjectItemCaseSensitive(document, "att");
-  if (cJSON_IsNumber(att) && att->valueint >= 0 && att->valueint <= 24 &&
-      att->valuedouble == att->valueint) {
-    dir->folderAtt = att->valueint;
+  const cJSON* volume = cJSON_GetObjectItemCaseSensitive(document, "volume");
+  if (cJSON_IsNumber(volume) && volume->valueint >= -20 && volume->valueint <= 6 &&
+      volume->valuedouble == volume->valueint) {
+    dir->folderVolume = static_cast<int8_t>(volume->valueint);
   }
   cJSON_Delete(document);
-  return dir->folderAtt;
+  return dir->folderVolume;
 }
 
 //----------------------------------------------------------------------
@@ -1075,7 +1079,7 @@ bool NDFile::openFile(String path) {
   FM.reset();
   ndConfig.flushLastView();
 
-  const uint8_t folderAtt = getFolderAtt(_getCurrentDirNode());
+  const int8_t folderVolume = getFolderVolume(_getCurrentDirNode());
   ND::fileFormat = readFile(path);
 
   if (ND::fileFormat != FileFormat::MDX) {  // MDX->VGM->MDXのとき PDX 上書きされるので
@@ -1111,8 +1115,7 @@ bool NDFile::openFile(String path) {
     playerWindow.dispData.time = ndConfig.get(CFG_PAUSE) == HOLD_3SEC ? -3 : 0;
   }
 
-  ND::att = ND::canPlay ? folderAtt : 0;
-  nju72342.reset(ND::att);
+  nju72342.reset(ND::canPlay ? folderVolume : 0);
   nju72342.panReset();
 
   xSemaphoreGive(spFileOpen);
@@ -1321,17 +1324,62 @@ NDFile ndFile = NDFile();
 FileTree::FileTree() : _rootNode(nullptr), _totalFiles(0) {
 }
 
+// Node と名前はツリーと同じ寿命。ブロック追加後も既存のポインタは有効。
+struct FileTree::Block {
+  Block* previous;
+  alignas(Node) unsigned char bytes[4096 - sizeof(Block*)];
+};
+static_assert(std::is_trivially_destructible<Node>::value, "Block release skips Node destructors");
+
 FileTree::~FileTree() {
-  if (_rootNode) _deleteTree(_rootNode);
+  _rewind(nullptr, 0);
 }
 
-// PSRAM 用文字列コピー
+void FileTree::_rewind(Block* block, size_t used) {
+  while (_block != block) {
+    Block* previous = _block->previous;
+    free(_block);
+    _block = previous;
+  }
+  _used = used;
+}
+
+void* FileTree::_allocate(size_t size, size_t alignment) {
+  size_t offset = (_used + alignment - 1) & ~(alignment - 1);
+  if (size > sizeof(Block::bytes)) {
+    _allocationFailed = true;
+    return nullptr;
+  }
+  if (!_block || offset + size > sizeof(Block::bytes)) {
+    void* storage = ps_malloc(sizeof(Block));
+    if (!storage) {
+      _allocationFailed = true;
+      return nullptr;
+    }
+    Block* next = new (storage) Block;
+    next->previous = _block;
+    _block = next;
+    offset = 0;
+  }
+  _used = offset + size;
+  return _block->bytes + offset;
+}
+
+Node* FileTree::_makeNode(const char* name) {
+  const size_t length = strlen(name) + 1;
+  auto* storage = static_cast<unsigned char*>(_allocate(sizeof(Node) + length, alignof(Node)));
+  if (!storage) return nullptr;
+  Node* node = new (storage) Node();
+  node->name = reinterpret_cast<char*>(storage + sizeof(Node));
+  memcpy(node->name, name, length);
+  return node;
+}
+
 char* FileTree::_ps_strdup(const char* s) {
-  if (s == nullptr) return nullptr;
-  size_t len = strlen(s) + 1;
-  char* d = (char*)ps_malloc(len);  // PSRAMへ確保
-  if (d) memcpy(d, s, len);
-  return d;
+  const size_t length = strlen(s) + 1;
+  char* copy = static_cast<char*>(_allocate(length, 1));
+  if (copy) memcpy(copy, s, length);
+  return copy;
 }
 
 // 対象ファイルか
@@ -1346,10 +1394,9 @@ bool FileTree::_isTargetFile(const char* filename) {
 }
 
 bool FileTree::begin(const char* rootPath) {
-  if (_rootNode) {
-    _deleteTree(_rootNode);
-    _rootNode = nullptr;
-  }
+  _rewind(nullptr, 0);
+  _rootNode = nullptr;
+  _allocationFailed = false;
 
   _totalFiles = 0;
   lcd.print("Scanned files: ");
@@ -1358,11 +1405,9 @@ bool FileTree::begin(const char* rootPath) {
   updateScanProgress(_totalFiles);
 
   // ルートノード
-  _rootNode = (Node*)ps_malloc(sizeof(Node));
-  *_rootNode = Node();
+  _rootNode = _makeNode("");
+  if (!_rootNode) return false;
   _rootNode->type = NODE_TYPE_DIR;
-  _rootNode->name = _ps_strdup("");  // ルートは空名にする
-  _rootNode->parent = nullptr;
 
   // 子を構築
   String scanRootPath = String(ND_SD_MOUNTPOINT);
@@ -1372,8 +1417,17 @@ bool FileTree::begin(const char* rootPath) {
     }
     scanRootPath += rootPath;
   }
-  Node* children = _buildTree(scanRootPath.c_str(), _rootNode);
-  _rootNode->firstChild = children;
+  try {
+    _rootNode->firstChild = _buildTree(scanRootPath.c_str(), _rootNode);
+  } catch (const std::bad_alloc&) {
+    _allocationFailed = true;
+  }
+  if (_allocationFailed) {
+    _rewind(nullptr, 0);
+    _rootNode = nullptr;
+    _totalFiles = 0;
+    return false;
+  }
   updateScanProgress(_totalFiles);
 
   return true;
@@ -1751,11 +1805,12 @@ Node* FileTree::getPrevFileNode(Node* node, bool wrap) {
 
 // 再帰走査
 Node* FileTree::_buildTree(const char* path, Node* parent) {
-  DIR* dir = opendir(path);
+  using DirHandle = std::unique_ptr<DIR, decltype(&closedir)>;
+  DirHandle dir(opendir(path), closedir);
   if (!dir) {
     return nullptr;
   }
-  rewinddir(dir);
+  rewinddir(dir.get());
 
   Node* fileHead = nullptr;
   Node* fileTail = nullptr;
@@ -1770,6 +1825,7 @@ Node* FileTree::_buildTree(const char* path, Node* parent) {
   std::vector<String> targetFiles;
   std::vector<PendingDirEntry> childDirs;
   String snapDirPath;
+  String defaultPng;
 
   auto appendNode = [](Node*& head, Node*& tail, Node* node) {
     if (!head) {
@@ -1796,7 +1852,7 @@ Node* FileTree::_buildTree(const char* path, Node* parent) {
   };
 
   while (true) {
-    struct dirent* entry = readdir(dir);
+    struct dirent* entry = readdir(dir.get());
     if (!entry) break;  // 終了
 
     String baseName = String(entry->d_name);
@@ -1825,8 +1881,7 @@ Node* FileTree::_buildTree(const char* path, Node* parent) {
     } else {
       const char* ext = strrchr(baseName.c_str(), '.');
       if (ext && strcasecmp(ext, ".png") == 0) {
-        if (parent->pngName) free(parent->pngName);
-        parent->pngName = _ps_strdup(baseName.c_str());
+        defaultPng = baseName;
       }
 
       if (_isTargetFile(baseName.c_str())) {
@@ -1834,14 +1889,13 @@ Node* FileTree::_buildTree(const char* path, Node* parent) {
       }
     }
   }
-  closedir(dir);
+  dir.reset();
 
   std::vector<Node*> fileNodes;
   for (const String& fileName : targetFiles) {
-    Node* fileNode = (Node*)ps_malloc(sizeof(Node));
-    *fileNode = Node();
+    Node* fileNode = _makeNode(fileName.c_str());
+    if (!fileNode) return nullptr;
     fileNode->type = NODE_TYPE_FILE;
-    fileNode->name = _ps_strdup(fileName.c_str());
     fileNode->parent = parent;
     fileNode->subtreeFileCount = 1;
     fileNodes.push_back(fileNode);
@@ -1862,10 +1916,10 @@ Node* FileTree::_buildTree(const char* path, Node* parent) {
     };
 
     std::vector<PendingSnapMatch> snapMatches;
-    DIR* snapDir = opendir(snapDirPath.c_str());
+    DirHandle snapDir(opendir(snapDirPath.c_str()), closedir);
     if (snapDir) {
       while (true) {
-        struct dirent* snapEntry = readdir(snapDir);
+        struct dirent* snapEntry = readdir(snapDir.get());
         if (!snapEntry) break;
         if (snapEntry->d_type == DT_DIR) continue;
 
@@ -1883,15 +1937,14 @@ Node* FileTree::_buildTree(const char* path, Node* parent) {
         }
         snapMatches.push_back(match);
       }
-      closedir(snapDir);
     }
 
     for (Node* fileNode : fileNodes) {
       String fileStem = getBaseNameWithoutExt(String(fileNode->name));
       for (const PendingSnapMatch& match : snapMatches) {
         if (!match.isIndex && strcasecmp(match.stem.c_str(), fileStem.c_str()) == 0) {
-          if (fileNode->pngName) free(fileNode->pngName);
           fileNode->pngName = _ps_strdup(match.fileName.c_str());
+          if (!fileNode->pngName) return nullptr;
           break;
         }
       }
@@ -1904,22 +1957,23 @@ Node* FileTree::_buildTree(const char* path, Node* parent) {
       Node* fileNode = fileNodes[match.index - 1];
       if (fileNode->pngName == nullptr) {
         fileNode->pngName = _ps_strdup(match.fileName.c_str());
+        if (!fileNode->pngName) return nullptr;
       }
     }
   }
 
   for (const PendingDirEntry& childDir : childDirs) {
-    Node* dirNode = (Node*)ps_malloc(sizeof(Node));
-    *dirNode = Node();
+    Block* mark = _block;
+    const size_t used = _used;
+    Node* dirNode = _makeNode(childDir.baseName.c_str());
+    if (!dirNode) return nullptr;
     dirNode->type = NODE_TYPE_DIR;
-    dirNode->name = _ps_strdup(childDir.baseName.c_str());
     dirNode->parent = parent;
 
     Node* subChild = _buildTree(childDir.fullPath.c_str(), dirNode);
+    if (_allocationFailed) return nullptr;
     if (subChild == nullptr) {
-      free(dirNode->name);
-      if (dirNode->pngName) free(dirNode->pngName);
-      free(dirNode);
+      _rewind(mark, used);
       continue;
     }
 
@@ -1944,6 +1998,10 @@ Node* FileTree::_buildTree(const char* path, Node* parent) {
   parent->firstChild = firstChild;
   parent->lastChild = lastChild;
 
+  if (firstChild && defaultPng.length()) {
+    parent->pngName = _ps_strdup(defaultPng.c_str());
+    if (!parent->pngName) return nullptr;
+  }
   return firstChild;
 }
 
@@ -1965,15 +2023,4 @@ String FileTree::getFullPath(Node* node) {
   return "/" + path;
 }
 
-void FileTree::_deleteTree(Node* node) {
-  while (node) {
-    Node* nextSibling = node->next;
-    if (node->firstChild) _deleteTree(node->firstChild);  // 子を先に消去
-    if (node->name) free(node->name);
-    if (node->pngName) free(node->pngName);
-    free(node);
-    node = nextSibling;
-  }
-}
-
-FileTree fileTree = FileTree();
+FileTree fileTree;
