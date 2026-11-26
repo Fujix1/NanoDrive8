@@ -1531,7 +1531,9 @@ void MDXClass::processTick() {
                 break;
               }
 
-              const int blockId = (int)(((u32_t)tracks[i].PCMBank * 96u) + (u32_t)noteNum);
+              // portable_mdx: PCM1 は先頭のバンクを使い、PCM8 は FD で選んだバンクを使う。
+              const u32_t bank = pcm8 ? tracks[i].PCMBank : 0u;
+              const int blockId = (int)(bank * 96u + (u32_t)noteNum);
 
               if (tracks[i].adpcmHold) {
                 int currentId = pcm8GetCurrentId(adpcmIndex);
@@ -1547,8 +1549,8 @@ void MDXClass::processTick() {
                 //  FM.setOKIM6258command(0b00000010, 1);  // ADPCM オン
               }
 
-              const u32_t entry = ((u32_t)tracks[i].PCMBank * 96u + (u32_t)noteNum) * 8u;
-              const u32_t minStartPos = ((u32_t)tracks[i].PCMBank + 1u) * 96u * 8u;
+              const u32_t entry = (u32_t)blockId * 8u;
+              const u32_t minStartPos = (bank + 1u) * 96u * 8u;
               const u32_t startPos = ndFile.get_pdx_ui32_be_at(entry);
               u32_t sizeBytes = ndFile.get_pdx_ui32_be_at(entry + 0x04);
               if (startPos < minStartPos || startPos >= ndFile.pdxSize) {
