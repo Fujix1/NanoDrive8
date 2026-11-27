@@ -1,5 +1,7 @@
 #include "input.h"
 
+#include <atomic>
+
 #include <Adafruit_TCA8418.h>
 #include <driver/gpio.h>
 #include <soc/gpio_reg.h>
@@ -14,6 +16,9 @@ static TimerHandle_t keyRepeatTimer = nullptr;
 enum class KeyRepeatState : u8_t { Idle, Waiting, Repeating };
 static volatile KeyRepeatState keyRepeatState = KeyRepeatState::Idle;
 static volatile int activeKey = -1;
+static std::atomic<ViewMode> btn00PressedView{ViewMode::Serial};
+static std::atomic<ViewMode> btn00PendingView{ViewMode::Serial};
+static QueueHandle_t volumeStepQueue = nullptr;
 static event queuedEvents[2];
 static bool holdCountdownActive = false;
 static int8_t holdCountdownSec = 0;
@@ -382,11 +387,24 @@ static bool shouldIgnoreEncoderButtonPress(int key) {
   return key == btn60 && isKeyRepeatActive();
 }
 
-// キーリピートタイマー処理
-void postRepeatKey(int key) {
-  //
-  // Serial.printf("キーリピート: %d\n", key);
-  input.inputBuffer = (Button)key;
+static bool isPlaybackView(ViewMode view) {
+  return view == ViewMode::Player || view == ViewMode::Visual;
+}
+
+static bool isBtn00RepeatView(ViewMode view) {
+  return view == ViewMode::Config || view == ViewMode::Browser;
+}
+
+static void postKey(int key) {
+  if (key == btn00) {
+    // 画面をまたいで押下やリピートを処理しない。
+    const ViewMode pressedView = btn00PressedView.load();
+    if (isBtn00RepeatView(pressedView) && pressedView == disp.currentView) {
+      btn00PendingView.store(pressedView);
+    }
+  } else {
+    input.inputBuffer = (Button)key;
+  }
 }
 
 // キーリピートタイマーハンドラ
@@ -394,7 +412,7 @@ static void hKeyRepeat(TimerHandle_t) {
   if (activeKey < 0) return;
 
   if (keyRepeatState == KeyRepeatState::Waiting) {
-    postRepeatKey(activeKey);
+    postKey(activeKey);
 
     // リピ開始
     keyRepeatState = KeyRepeatState::Repeating;
@@ -403,7 +421,7 @@ static void hKeyRepeat(TimerHandle_t) {
   }
 
   if (keyRepeatState == KeyRepeatState::Repeating) {
-    postRepeatKey(activeKey);
+    postKey(activeKey);
   }
 }
 
@@ -429,6 +447,7 @@ void IRAM_ATTR TCA8418_irq(void*) {
 // TCA8418 割り込み実処理
 void tcaTask(void* arg) {
   tcaTaskHandle = xTaskGetCurrentTaskHandle();
+  bool btn00UsedForVolume = false;
   while (1) {
     ulTaskNotifyTake(pdTRUE, portMAX_DELAY);  // 割り込みくるまで待機
 
@@ -445,9 +464,31 @@ void tcaTask(void* arg) {
 
       if ((key & 0x01) == 0) {  // カラム0
                                 // Serial.printf("key: %d\n", key);
-        if (key == btn00 || key == btn10 || key == btn20) {
+        if (key == btn00) {
+          const ViewMode view = disp.currentView;
           if (k & 0x80) {
-            onKeyDown(key);
+            btn00PressedView.store(view);
+            btn00UsedForVolume = false;
+            if (isBtn00RepeatView(view)) onKeyDown(key);
+          } else {
+            const ViewMode pressedView = btn00PressedView.exchange(ViewMode::Serial);
+            if (isBtn00RepeatView(pressedView)) {
+              onKeyUp(key);
+            } else if (!btn00UsedForVolume && pressedView == view && isPlaybackView(view)) {
+              btn00PendingView.store(view);
+            }
+          }
+        } else if (key == btn10 || key == btn20) {
+          if (k & 0x80) {
+            const ViewMode view = disp.currentView;
+            if (ND::currentMode == MODE_PLAYER && isPlaybackView(view) &&
+                btn00PressedView.load() == view) {
+              btn00UsedForVolume = true;
+              const int8_t step = key == btn10 ? -1 : 1;
+              if (volumeStepQueue != nullptr) xQueueSend(volumeStepQueue, &step, 0);
+            } else {
+              onKeyDown(key);
+            }
           } else {
             onKeyUp(key);
           }
@@ -486,7 +527,7 @@ void onKeyDown(int key) {
     xTimerChangePeriod(keyRepeatTimer, pdMS_TO_TICKS(INPUT_REPEAT_DELAY), 0);
     xTimerStart(keyRepeatTimer, 0);
   }
-  input.inputBuffer = (Button)key;
+  postKey(key);
 }
 
 void onKeyUp(int keyIndex) {
@@ -505,7 +546,7 @@ void onKeyUp(int keyIndex) {
 
   // Serial.printf("\tonKeyUp: %d\n", keyIndex);
 
-  input.inputBuffer = btnNONE;
+  if (keyIndex != btn00) input.inputBuffer = btnNONE;
   discardQueuedEvent(repeatEvent);
 }
 
@@ -570,6 +611,7 @@ bool Input::init() {
 
   // キュー作成
   xQueueInput = xQueueCreate(1, sizeof(event));
+  volumeStepQueue = xQueueCreate(8, sizeof(int8_t));
 
   // イベントループタスク
   xTaskCreateUniversal(eventLoop, "eventloop", 6000, NULL, 1, &tskEventLoop, PRO_CPU_NUM);
@@ -666,26 +708,38 @@ void Input::inputHandler() {
 
   updateHoldCountdown();
 
+  int8_t volumeStep;
+  if (volumeStepQueue != nullptr && xQueueReceive(volumeStepQueue, &volumeStep, 0) == pdTRUE) {
+    ndFile.adjustFolderVolume(volumeStep);
+  }
+
   if (encoderEnabled && encoderDirty) {
     pollEncoder();
   }
 
-  if (inputBuffer == btnNONE) return;
+  const ViewMode view = disp.currentView;
+  Button key = inputBuffer;
+  const bool hasBufferedKey = key != btnNONE;
+  if (!hasBufferedKey && btn00PendingView.exchange(ViewMode::Serial) == view &&
+      view != ViewMode::Serial) {
+    key = btn00;
+  }
+  if (key == btnNONE) return;
 
   const bool isControlSet2 = ndConfig.get(CFG_CONTROL) == CTRL_2;
 
   // 入力処理
-  switch (disp.currentView) {
+  switch (view) {
     case ViewMode::Player: {  // プレイヤーのとき
       if (ND::currentMode == MODE_SERIAL) {
-        if (inputBuffer == btn00) {
+        if (key == btn00) {
           sendEventToQueue(event::Left);
-        } else if (inputBuffer == btn10 || inputBuffer == btn20) {
+        } else if (key == btn10 || key == btn20) {
           sendEventToQueue(event::Option);
         }
         break;
       }
-      switch (inputBuffer) {
+      switch (key) {
         case btn00: {
           if (isControlSet2) {
             ndFile.dirPlay(1);
@@ -712,7 +766,7 @@ void Input::inputHandler() {
       break;
     }
     case ViewMode::Config: {  // 設定ウィンドウのとき
-      switch (inputBuffer) {
+      switch (key) {
         case btn00:
           sendEventToQueue(event::Left);
           break;
@@ -734,12 +788,12 @@ void Input::inputHandler() {
     }
     case ViewMode::Visual: {  // ビジュアル
       if (ND::currentMode == MODE_SERIAL) {
-        if (inputBuffer == btn00) sendEventToQueue(event::Close);
-        else if (inputBuffer == btn10 || inputBuffer == btn20)
+        if (key == btn00) sendEventToQueue(event::Close);
+        else if (key == btn10 || key == btn20)
           sendEventToQueue(event::Option);
         break;
       }
-      switch (inputBuffer) {
+      switch (key) {
         case btn00:
           if (isControlSet2) {
             ndFile.dirPlay(1);
@@ -766,7 +820,7 @@ void Input::inputHandler() {
       break;
     }
     case ViewMode::Browser: {  // ブラウザウィンドウのとき
-      switch (inputBuffer) {
+      switch (key) {
         case btn00:
           sendEventToQueue(event::Close);  // 閉じる
           break;
@@ -788,7 +842,7 @@ void Input::inputHandler() {
     }
   }
 
-  inputBuffer = btnNONE;
+  if (hasBufferedKey) inputBuffer = btnNONE;
 }
 
 void Input::setEnabled(bool state) {

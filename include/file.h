@@ -34,6 +34,8 @@ class NDFile {
   bool filePlay(int count);
   bool dirPlay(int count);
   bool openFile(String path);
+  int getLoadingVolumeCorrectionDb() const;
+  bool adjustFolderVolume(int8_t step);
   void resetRandomSession();
   void requestPlay(Node* node);
   bool processPendingPlayRequest();

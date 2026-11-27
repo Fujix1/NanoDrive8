@@ -6,6 +6,7 @@
 #define __NJU72342_H
 
 #include <Arduino.h>
+#include <atomic>
 
 #define NJU72342_ADDR 0x40  // I2C address
 
@@ -25,6 +26,12 @@ class NJU72342 {
   tFadeOutStatus fadeOutStatus = FADEOUT_BEFORE;
   void init(int SDA, int SCL, int CLOCK, u16_t fadeOutDuration, bool NJU72342);
   void reset(int8_t folderVolume);
+  int getVolumeCorrectionDb() const {
+    return kDefaultAttenuation - _mainAttenuation.load(std::memory_order_relaxed);
+  }
+  void setVolumeCorrectionDb(int8_t correctionDb) {
+    setMainAttenuation(kDefaultAttenuation - correctionDb);
+  }
   void setInputGain(u8_t ch, tNJU7234X_GAIN newInputGain);
   void setVolume_3B_4B(u8_t newGain);  // ch3と4の音量設定
   void setVolume_3B(u8_t newGain);     // ch3の音量設定
@@ -55,7 +62,7 @@ class NJU72342 {
   bool _isPanMuted = false;
   u8_t _currentVolume[4] = {100, 100, 100, 100};  // 各チャンネルの音量
   static constexpr u8_t kDefaultAttenuation = 6;  // メイン出力の基準は -6 dB
-  u8_t _mainAttenuation = kDefaultAttenuation;
+  std::atomic<u8_t> _mainAttenuation{kDefaultAttenuation};
   u8_t _fadeAttenuation = 0;
   u8_t _panAttenuation = 0;
   tPan _pan = PAN_CENTER;

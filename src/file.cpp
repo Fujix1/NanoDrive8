@@ -1,5 +1,9 @@
 #include "file.h"
 
+#include <algorithm>
+#include <atomic>
+#include <cerrno>
+#include <cstdio>
 #include <memory>
 #include <new>
 #include <type_traits>
@@ -8,6 +12,7 @@
 #include <cJSON.h>
 #include <dirent.h>
 #include <esp_system.h>
+#include <unistd.h>
 
 #include "mdx.h"
 #include "okim6258.h"
@@ -31,6 +36,10 @@ extern "C" void __wrap__ZN8SPIClass16beginTransactionE11SPISettings(SPIClass* sp
 
 static File hFile;
 
+static constexpr char kSdMountPath[] = "/sd";
+static SemaphoreHandle_t folderVolumeSaveMutex = nullptr;
+static TaskHandle_t folderVolumeSaveTaskHandle = nullptr;
+static void folderVolumeSaveTask(void*);
 static SemaphoreHandle_t spFileOpen;  // ファイル開く処理用セマフォ
 static u16_t scanProgressX = 0;
 static u16_t scanProgressY = 0;
@@ -307,7 +316,7 @@ bool NDFile::init() {
   SPI_SD.begin(SD_CLK, SD_MISO, SD_MOSI, SD_CS);
   int n = 0;
   lcd.print("Checking SD card");
-  while (!SD.begin(SD_CS, SPI_SD, kSdTransferClockHz)) {  // SD マウント試行
+  while (!SD.begin(SD_CS, SPI_SD, kSdTransferClockHz, kSdMountPath)) {  // SD マウント試行
     vTaskDelay(200);
     n++;
     lcd.print(".");
@@ -358,6 +367,18 @@ bool NDFile::init() {
 
   // キャッシュタスク
   xTaskCreatePinnedToCore(cacheTask, "cacheTask", 4096, NULL, 1, NULL, PRO_CPU_NUM);
+
+  // ADPCMエンコードは APP_CPU 上。SD保存は PRO_CPU の低優先度タスクで行う。
+  folderVolumeSaveMutex = xSemaphoreCreateMutex();
+  if (folderVolumeSaveMutex == nullptr ||
+      xTaskCreatePinnedToCore(folderVolumeSaveTask, "folderVolumeSave", 4096, nullptr,
+                              tskIDLE_PRIORITY, &folderVolumeSaveTaskHandle,
+                              PRO_CPU_NUM) != pdPASS) {
+    if (folderVolumeSaveMutex != nullptr) vSemaphoreDelete(folderVolumeSaveMutex);
+    folderVolumeSaveMutex = nullptr;
+    folderVolumeSaveTaskHandle = nullptr;
+    Serial.println("ERROR: Folder volume save task unavailable.");
+  }
 
   return true;
 }
@@ -1010,41 +1031,178 @@ bool NDFile::_playRandomAll(int count) {
   return _playNode(target);
 }
 
+static constexpr int kMinFolderVolume = -20;
+static constexpr int kMaxFolderVolume = 6;
+static constexpr size_t kFolderSettingsMaxSize = 128;
+using FolderSettings = std::unique_ptr<cJSON, decltype(&cJSON_Delete)>;
+
+static String getFolderSettingsPath(Node* dir) {
+  String path = String(kSdMountPath) + fileTree.getFullPath(dir);
+  if (!path.endsWith("/")) path += '/';
+  return path + "setting.json";
+}
+
+static FolderSettings readFolderSettingsFile(const String& path, bool& missing) {
+  FILE* file = fopen(path.c_str(), "rb");
+  missing = !file && errno == ENOENT;
+  if (!file) return {nullptr, cJSON_Delete};
+
+  char buffer[kFolderSettingsMaxSize + 1];
+  const size_t length = fread(buffer, 1, sizeof(buffer), file);
+  const bool readOk = !ferror(file);
+  const bool closed = fclose(file) == 0;
+  if (!readOk || !closed || length == 0 || length >= sizeof(buffer) ||
+      memchr(buffer, '\0', length)) {
+    return {nullptr, cJSON_Delete};
+  }
+
+  buffer[length] = '\0';
+  return {cJSON_ParseWithLengthOpts(buffer, length + 1, nullptr, true), cJSON_Delete};
+}
+
+static FolderSettings readFolderSettings(const String& path, bool& primaryMissing) {
+  auto document = readFolderSettingsFile(path, primaryMissing);
+  if (primaryMissing) {
+    // 旧設定を退避した段階で電源が切れた場合は、退避ファイルを読む。
+    bool backupMissing;
+    document = readFolderSettingsFile(path + ".nd8.bak", backupMissing);
+    if (backupMissing) document.reset(cJSON_CreateObject());
+  }
+  return document;
+}
+
 // 曲の直上のフォルダにある設定だけを初回再生時に読む。
 static int8_t getFolderVolume(Node* dir) {
   if (!dir) return 0;
   if (dir->folderVolume != INT8_MIN) return dir->folderVolume;
 
-  String path = fileTree.getFullPath(dir);
-  if (!path.endsWith("/")) path += '/';
-  File settings = SD.open(path + "setting.json");
-  if (!settings || settings.isDirectory()) {
-    dir->folderVolume = 0;
-    return 0;
-  }
+  bool primaryMissing;
+  const auto document = readFolderSettings(getFolderSettingsPath(dir), primaryMissing);
+  if (!document) return 0;
 
-  char buffer[129];
-  const size_t length = settings.size();
-  if (length == 0 || length >= sizeof(buffer)) {
-    dir->folderVolume = 0;
-    return 0;
-  }
-  if (settings.read(reinterpret_cast<uint8_t*>(buffer), length) != length) return 0;
-  settings.close();
-  buffer[length] = '\0';
-
+  const cJSON* volume = cJSON_GetObjectItemCaseSensitive(document.get(), "volume");
   dir->folderVolume = 0;
-  if (memchr(buffer, '\0', length)) return 0;
-
-  const char* parseEnd = nullptr;
-  cJSON* document = cJSON_ParseWithLengthOpts(buffer, length + 1, &parseEnd, true);
-  const cJSON* volume = cJSON_GetObjectItemCaseSensitive(document, "volume");
-  if (cJSON_IsNumber(volume) && volume->valueint >= -20 && volume->valueint <= 6 &&
-      volume->valuedouble == volume->valueint) {
+  if (cJSON_IsNumber(volume) && volume->valueint >= kMinFolderVolume &&
+      volume->valueint <= kMaxFolderVolume && volume->valuedouble == volume->valueint) {
     dir->folderVolume = static_cast<int8_t>(volume->valueint);
   }
-  cJSON_Delete(document);
   return dir->folderVolume;
+}
+
+static bool replaceFolderSettings(const String& path, const char* json, size_t size,
+                                  bool primaryMissing) {
+  const String temporary = path + ".nd8.tmp";
+  const String backup = path + ".nd8.bak";
+  FILE* file = fopen(temporary.c_str(), "wb");
+  if (!file) return false;
+
+  const bool written = fwrite(json, 1, size, file) == size && fflush(file) == 0 &&
+                       fsync(fileno(file)) == 0;
+  const bool closed = fclose(file) == 0;
+  if (!written || !closed) {
+    unlink(temporary.c_str());
+    return false;
+  }
+
+  if (!primaryMissing) {
+    if ((unlink(backup.c_str()) != 0 && errno != ENOENT) ||
+        rename(path.c_str(), backup.c_str()) != 0) {
+      unlink(temporary.c_str());
+      return false;
+    }
+  }
+  // FAT では既存の宛先を置き換えられないため、旧設定は退避してから入れ替える。
+  if (rename(temporary.c_str(), path.c_str()) != 0) {
+    if (!primaryMissing) rename(backup.c_str(), path.c_str());
+    unlink(temporary.c_str());
+    return false;
+  }
+  unlink(backup.c_str());
+  return true;
+}
+
+static bool saveFolderVolume(Node* dir, int8_t volumeDb) {
+  const String path = getFolderSettingsPath(dir);
+  bool primaryMissing;
+  const auto document = readFolderSettings(path, primaryMissing);
+  if (!cJSON_IsObject(document.get())) return false;
+
+  FolderSettings volume{cJSON_CreateNumber(volumeDb), cJSON_Delete};
+  if (!volume) return false;
+  const bool updated = cJSON_GetObjectItemCaseSensitive(document.get(), "volume")
+                           ? cJSON_ReplaceItemInObjectCaseSensitive(document.get(), "volume",
+                                                                   volume.get())
+                           : cJSON_AddItemToObject(document.get(), "volume", volume.get());
+  if (!updated) return false;
+  volume.release();
+
+  char json[kFolderSettingsMaxSize + 5];
+  if (!cJSON_PrintPreallocated(document.get(), json, sizeof(json), false)) return false;
+  const size_t size = strlen(json);
+  return size <= kFolderSettingsMaxSize && replaceFolderSettings(path, json, size, primaryMissing);
+}
+
+struct FolderVolumeSave {
+  Node* dir;
+  int8_t volumeDb;
+};
+
+static std::vector<FolderVolumeSave> pendingFolderVolumes;
+
+static void requestFolderVolumeSave(Node* dir, int8_t volumeDb) {
+  if (folderVolumeSaveTaskHandle == nullptr) return;
+
+  xSemaphoreTake(folderVolumeSaveMutex, portMAX_DELAY);
+  auto pending = std::find_if(pendingFolderVolumes.begin(), pendingFolderVolumes.end(),
+                              [dir](const FolderVolumeSave& save) { return save.dir == dir; });
+  if (pending == pendingFolderVolumes.end()) {
+    pendingFolderVolumes.push_back({dir, volumeDb});
+  } else {
+    pending->volumeDb = volumeDb;
+  }
+  xSemaphoreGive(folderVolumeSaveMutex);
+  xTaskNotifyGive(folderVolumeSaveTaskHandle);
+}
+
+static void folderVolumeSaveTask(void*) {
+  std::vector<FolderVolumeSave> batch;
+  while (true) {
+    ulTaskNotifyTake(pdTRUE, portMAX_DELAY);
+    xSemaphoreTake(folderVolumeSaveMutex, portMAX_DELAY);
+    batch.swap(pendingFolderVolumes);
+    xSemaphoreGive(folderVolumeSaveMutex);
+
+    // SD I/O はキューのロック外で行い、再生側は待たない。
+    for (const auto& save : batch) {
+      if (!saveFolderVolume(save.dir, save.volumeDb)) {
+        Serial.printf("Failed to save folder volume: %s\n",
+                      getFolderSettingsPath(save.dir).c_str());
+      }
+    }
+    batch.clear();
+  }
+}
+
+bool NDFile::adjustFolderVolume(int8_t step) {
+  if (ND::currentMode != MODE_PLAYER || !ND::canPlay) return false;
+  Node* dir = _getCurrentDirNode();
+  if (!dir) return false;
+
+  const int current = nju72342.getVolumeCorrectionDb();
+  const int correction = std::max(kMinFolderVolume, std::min(kMaxFolderVolume, current + step));
+  if (correction == current) return false;
+
+  dir->folderVolume = static_cast<int8_t>(correction);
+  nju72342.setVolumeCorrectionDb(dir->folderVolume);
+  requestFolderVolumeSave(dir, dir->folderVolume);
+  return true;
+}
+
+// ready() 内の初回描画は、補正音量を音声出力に適用する前に行われる。
+static std::atomic<int> loadingVolumeCorrectionDb{INT8_MIN};
+
+int NDFile::getLoadingVolumeCorrectionDb() const {
+  return loadingVolumeCorrectionDb.load(std::memory_order_acquire);
 }
 
 //----------------------------------------------------------------------
@@ -1080,6 +1238,7 @@ bool NDFile::openFile(String path) {
   ndConfig.flushLastView();
 
   const int8_t folderVolume = getFolderVolume(_getCurrentDirNode());
+  loadingVolumeCorrectionDb.store(folderVolume, std::memory_order_release);
   ND::fileFormat = readFile(path);
 
   if (ND::fileFormat != FileFormat::MDX) {  // MDX->VGM->MDXのとき PDX 上書きされるので
@@ -1116,6 +1275,7 @@ bool NDFile::openFile(String path) {
   }
 
   nju72342.reset(ND::canPlay ? folderVolume : 0);
+  loadingVolumeCorrectionDb.store(INT8_MIN, std::memory_order_release);
   nju72342.panReset();
 
   xSemaphoreGive(spFileOpen);
