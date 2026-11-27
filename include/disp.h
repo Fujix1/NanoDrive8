@@ -338,20 +338,29 @@ class VisualWindow {
   LGFX_Sprite _sprShuffleOn;
   LGFX_Sprite _sprShuffleOff;
   LGFX_Sprite _sprTime;
+  LGFX_Sprite _sprVolumeCorrection;
+  LGFX_Sprite _sprTempo;
   int64_t _lastTimestampSec = INT64_MAX;
   int _lastTempoBpm = -1;
+  int _lastVolumeCorrectionDb = INT16_MIN;
   bool _lastTimestampVisible = false;
   void drawTimestamp(int64_t sec, bool toFrameBuffer, bool visible);
+  void drawVolumeCorrection(bool toFrameBuffer);
 
  public:
-  VisualWindow() : _sprShuffleOn(&lcd), _sprShuffleOff(&lcd), _sprTime(&lcd) {
+  VisualWindow()
+      : _sprShuffleOn(&lcd),
+        _sprShuffleOff(&lcd),
+        _sprTime(&lcd),
+        _sprVolumeCorrection(&lcd),
+        _sprTempo(&lcd) {
   }
   void init();
   void draw();
   void update();
   void updateLabels();
   void drawTimestamp(int64_t sec);
-  void drawTimestamp(int64_t sec, bool visible);
+  void updateHeader(int64_t sec, bool visible = true);
   void show();
   void close();
   void eventHandler(event ev);

@@ -116,14 +116,24 @@ static void formatTimestamp(char* buffer, size_t size, int64_t sec) {
   snprintf(buffer, size, "%s%llu:%02u", isNegative ? "-" : "",
            static_cast<unsigned long long>(absSec / 60), static_cast<unsigned int>(absSec % 60));
 }
-static constexpr u16_t kLabelSpriteWidth = labelsWidth;
-static constexpr u16_t kLabelSpriteHeight = 41;
+// 回転前の液晶座標では、横向き表示の左方向が Y の増加方向になる。
+static constexpr int kVisualHeaderFontSize = 14;
+static constexpr int kVisualTimestampWidth = 32;
+static constexpr int kVisualVolumeWidth = 45;
+static constexpr int kVisualVolumeY = kVisualTimestampWidth + 3;
+static constexpr int kVisualVolumeLeftShift = 3;
+static constexpr int kVisualTempoY = 86;
+static constexpr int kVisualTempoWidth = 32;
+static constexpr int kVisualShuffleY = 122;
+
+static constexpr u16_t kLabelSpriteWidth = labels_h39Width;
+static constexpr u16_t kLabelSpriteHeight = labels_h39Height / kLabelSpriteCount;
 static constexpr u16_t kLabelPcm8X = 155;
-static constexpr u16_t kLabelPcm8Y = 135;
+static constexpr u16_t kLabelPcm8Y = 144;
 static constexpr u16_t kLabelMdxX = 155;
-static constexpr u16_t kLabelMdxY = 179;
+static constexpr u16_t kLabelMdxY = 186;
 static constexpr u16_t kLabelVgmX = 155;
-static constexpr u16_t kLabelVgmY = 223;
+static constexpr u16_t kLabelVgmY = 228;
 static constexpr u16_t kLevelWaterfallAccelQ8 = 16;         // 落下加速度
 static constexpr u16_t kLevelWaterfallInitialSpeedQ8 = 32;  // 落下開始初速
 static constexpr u8_t kPeakHoldDelayFrames = 10;            // ピークホールドフレーム数
@@ -214,6 +224,54 @@ static void pushVisualSpriteToFrameBuffer(LGFX_Sprite& sprite, int x, int y) {
 
 static void pushVisualSpriteToLcd(LGFX_Sprite& sprite, int x, int y) {
   sprite.pushSprite(visualX(x, sprite.width()), visualY(y, sprite.height()));
+}
+
+static bool drawVisualHeaderText(LGFX_Sprite& target, int y, bool toFrameBuffer,
+                                 const char* text, Align align, const unsigned char* font,
+                                 size_t fontSize, int leftShift = 0) {
+  if (target.width() == 0) return false;
+  target.fillSprite(TFT_BLACK);
+  if (text[0] != '\0') {
+    disp.render.loadFont(font, fontSize);
+    disp.render.setFontSize(kVisualHeaderFontSize);
+    const int width = target.height();
+    const int availableWidth = width - 2 * leftShift;
+    // 桁数が増えた場合も、隣接する表示領域にかからないよう文字列の幅を収める。
+    const int textWidth = static_cast<int>(disp.render.getTextWidth("%s", text));
+    const int sourceWidth = std::max(availableWidth, textWidth);
+    LGFX_Sprite source(&lcd);
+    source.setPsram(false);
+    source.createSprite(sourceWidth, kVisualHeaderFontSize);
+    if (source.width() == 0) {
+      disp.render.unloadFont();
+      return false;
+    }
+
+    source.fillSprite(TFT_BLACK);
+    disp.render.setDrawer(source);
+    disp.render.setAlignment(align);
+    disp.render.setFontColor(C_MDX_ON, TFT_BLACK);
+    const int cursorX = align == Align::TopCenter ? sourceWidth / 2
+                        : align == Align::TopRight ? sourceWidth
+                                                   : 0;
+    disp.render.setCursor(cursorX, 0);
+    disp.render.printf("%s", text);
+    disp.render.unloadFont();
+
+    source.setPivot(sourceWidth / 2.0f, source.height() / 2.0f);
+    const float angle = kVisualRotate180 ? 90.0f : -90.0f;
+    const float scale = static_cast<float>(availableWidth) / sourceWidth;
+    const float centerY = width / 2.0f + (kVisualRotate180 ? -leftShift : leftShift);
+    source.pushRotateZoom(&target, target.width() / 2.0f, centerY, angle, scale, 1.0f, TFT_BLACK);
+  }
+
+  const int x = LCD_W - target.width() - 1;
+  if (toFrameBuffer) {
+    pushVisualSpriteToFrameBuffer(target, x, y);
+  } else {
+    pushVisualSpriteToLcd(target, x, y);
+  }
+  return true;
 }
 
 static void pushVisualBufferToLcd(int x, int y, int w, int h, const u16_t* data) {
@@ -343,7 +401,7 @@ static void cutLabelSprite(u8_t labelIndex) {
     return;
   }
 
-  const u16_t* src = &labels[labelIndex * kLabelSpriteWidth * kLabelSpriteHeight];
+  const u16_t* src = &labels_h39[labelIndex * kLabelSpriteWidth * kLabelSpriteHeight];
   copyVisualImage(labelSprite[labelIndex], src, kLabelSpriteWidth, kLabelSpriteHeight);
 }
 
@@ -1059,7 +1117,7 @@ static void dispUpdateWorker() {
           visualWindow.updateLabels();
           // カウントダウン中だけは点滅させず、残り秒数を常時表示する。
           const bool visible = isPlayHoldCountdownActive() || ((millis() / 500) & 1) == 0;
-          visualWindow.drawTimestamp(sec, visible);
+          visualWindow.updateHeader(sec, visible);
         }
         return;
       }
@@ -1072,8 +1130,8 @@ static void dispUpdateWorker() {
         return;
       }
 
-      // 秒だけでなく、MDXのテンポ変更も即座に表示へ反映する。
-      visualWindow.drawTimestamp(sec);
+      // 秒・テンポ・補正音量の変更をヘッダーに反映する。
+      visualWindow.updateHeader(sec);
       if (playerWindow.dispData.time != sec) {
         playerWindow.dispData.time = sec;
       }
@@ -2067,7 +2125,11 @@ void VisualWindow::init() {
   createVisualShuffleIconSprite(_sprShuffleOff, C_MDX_OFF);
 
   _sprTime.setPsram(false);
-  _sprTime.createSprite(14, 104);
+  _sprTime.createSprite(kVisualHeaderFontSize, kVisualTimestampWidth);
+  _sprVolumeCorrection.setPsram(false);
+  _sprVolumeCorrection.createSprite(kVisualHeaderFontSize, kVisualVolumeWidth);
+  _sprTempo.setPsram(false);
+  _sprTempo.createSprite(kVisualHeaderFontSize, kVisualTempoWidth);
 }
 
 void VisualWindow::drawTimestamp(int64_t sec) {
@@ -2076,80 +2138,68 @@ void VisualWindow::drawTimestamp(int64_t sec) {
   unlockDrawing();
 }
 
-void VisualWindow::drawTimestamp(int64_t sec, bool visible) {
-  lockDrawing();
-  drawTimestamp(sec, false, visible);
+void VisualWindow::updateHeader(int64_t sec, bool visible) {
+  if (!tryLockDrawing()) return;
+  if (disp.currentView == ViewMode::Visual && !disp.stopTimerDrawing) {
+    drawTimestamp(sec, false, visible);
+    if (ND::canPlay) drawVolumeCorrection(false);
+  }
   unlockDrawing();
 }
 
 void VisualWindow::drawTimestamp(int64_t sec, bool toFrameBuffer, bool visible) {
   if (ND::currentMode == MODE_SERIAL) visible = false;
-  if (_sprTime.width() == 0) {
-    return;
-  }
   static constexpr int kTempoHidden = -1;
   static constexpr int kTempoNoteOnly = -2;
-  const int tempoBpm = ND::currentMode == MODE_SERIAL || ND::fileFormat != FileFormat::MDX
+  const int tempoBpm = !visible || ND::fileFormat != FileFormat::MDX
                            ? kTempoHidden
                            : (MDX.hasExplicitTempo() ? MDX.getTempoBpm() : kTempoNoteOnly);
-  if (_lastTimestampSec == sec && _lastTempoBpm == tempoBpm && _lastTimestampVisible == visible) {
-    return;
-  }
 
-  static constexpr int kTimestampSourceW = 104;
-  static constexpr int kTimestampSourceH = 14;
-  LGFX_Sprite source(&lcd);
-  source.setPsram(false);
-  source.createSprite(kTimestampSourceW, kTimestampSourceH);
-  if (source.width() == 0) {
-    return;
-  }
-
-  source.fillSprite(TFT_BLACK);
-  disp.render.setDrawer(source);
-  disp.render.setAlignment(Align::TopRight);
-  disp.render.loadFont(nimbusBold, sizeof(nimbusBold));
-  disp.render.setFontSize(14);
-  disp.render.setFontColor(C_MDX_ON, TFT_BLACK);
-  if (visible) {
-    if (tempoBpm != kTempoHidden) {
-      disp.render.unloadFont();
-      disp.render.loadFont(fontMain, sizeof(fontMain));
-      disp.render.setAlignment(Align::TopLeft);
-      disp.render.setCursor(0, 0);
-      if (tempoBpm == kTempoNoteOnly) {
-        disp.render.printf("♪");
-      } else {
-        disp.render.printf("♪%d", tempoBpm);
-      }
-      disp.render.unloadFont();
-      disp.render.loadFont(nimbusBold, sizeof(nimbusBold));
-      disp.render.setAlignment(Align::TopRight);
+  if (toFrameBuffer || _lastTimestampSec != sec || _lastTimestampVisible != visible) {
+    char timestamp[24] = {};
+    if (visible) formatTimestamp(timestamp, sizeof(timestamp), sec);
+    if (!drawVisualHeaderText(_sprTime, 0, toFrameBuffer, timestamp, Align::TopRight,
+                              nimbusBold, sizeof(nimbusBold))) {
+      return;
     }
-    char timestamp[24];
-    formatTimestamp(timestamp, sizeof(timestamp), sec);
-    disp.render.setCursor(source.width(), 0);
-    disp.render.printf("%s", timestamp);
   }
-  disp.render.unloadFont();
 
-  _sprTime.fillSprite(TFT_BLACK);
-  source.setPivot(source.width() / 2.0f, source.height() / 2.0f);
-  const float angle = kVisualRotate180 ? 90.0f : -90.0f;
-  source.pushRotateZoom(&_sprTime, _sprTime.width() / 2.0f, _sprTime.height() / 2.0f, angle, 1.0f,
-                        1.0f, TFT_BLACK);
-  source.deleteSprite();
-
-  const int x = LCD_W - _sprTime.width();
-  const int y = 0;
-  if (toFrameBuffer) {
-    pushVisualSpriteToFrameBuffer(_sprTime, x, y);
-  } else {
-    pushVisualSpriteToLcd(_sprTime, x, y);
+  if (toFrameBuffer || _lastTempoBpm != tempoBpm) {
+    char tempo[12] = {};
+    if (tempoBpm == kTempoNoteOnly) {
+      snprintf(tempo, sizeof(tempo), "♪");
+    } else if (tempoBpm != kTempoHidden) {
+      snprintf(tempo, sizeof(tempo), "♪%d", tempoBpm);
+    }
+    if (!drawVisualHeaderText(_sprTempo, kVisualTempoY, toFrameBuffer, tempo, Align::TopLeft,
+                              fontMain, sizeof(fontMain))) {
+      return;
+    }
   }
   _lastTimestampSec = sec;
   _lastTempoBpm = tempoBpm;
   _lastTimestampVisible = visible;
+}
+
+void VisualWindow::drawVolumeCorrection(bool toFrameBuffer) {
+  int correction = INT8_MIN;
+  if (ND::currentMode == MODE_PLAYER) {
+    correction = ndFile.getLoadingVolumeCorrectionDb();
+    if (correction == INT8_MIN && ND::canPlay) {
+      correction = nju72342.getVolumeCorrectionDb();
+    }
+  }
+  if (toFrameBuffer) _lastVolumeCorrectionDb = INT16_MIN;
+  if (correction == _lastVolumeCorrectionDb) return;
+
+  char caption[12] = {};
+  if (correction != INT8_MIN) {
+    snprintf(caption, sizeof(caption), correction == 0 ? "%ddB" : "%+ddB", correction);
+  }
+  if (drawVisualHeaderText(_sprVolumeCorrection, kVisualVolumeY, toFrameBuffer, caption,
+                           Align::TopCenter, fontMain, sizeof(fontMain), kVisualVolumeLeftShift)) {
+    _lastVolumeCorrectionDb = correction;
+  }
 }
 
 void VisualWindow::draw() {
@@ -2182,15 +2232,13 @@ void VisualWindow::draw() {
 
   // シャッフル再生のアイコン表示
   if (ND::currentMode == MODE_PLAYER && ndConfig.get(CFG_SHUFFLE) != TRANDOM_NO) {
-    pushVisualSpriteToFrameBuffer(_sprShuffleOn, 154, 113);
+    pushVisualSpriteToFrameBuffer(_sprShuffleOn, 154, kVisualShuffleY);
   } else {
-    pushVisualSpriteToFrameBuffer(_sprShuffleOff, 154, 113);
+    pushVisualSpriteToFrameBuffer(_sprShuffleOff, 154, kVisualShuffleY);
   }
 
-  _lastTimestampSec = INT64_MAX;
-  _lastTempoBpm = -1;
-  _lastTimestampVisible = false;
   drawTimestamp(playerWindow.dispData.time, true, ND::currentMode == MODE_PLAYER);
+  drawVolumeCorrection(true);
   frameBuffer.pushSprite(0, 0);
 
   resetVisualHistory();
@@ -2584,6 +2632,7 @@ void BrowserPanelRenderer::onDrawItem(LGFX_Sprite& target, int itemIndex, int x,
   }
 
   disp.render.setDrawer(target);
+  disp.render.setAlignment(Align::TopLeft);
   disp.render.setCursor(x + 20, y + 7);
   disp.render.setFontColor(fg, bg);
   disp.render.setFontSize(17);
