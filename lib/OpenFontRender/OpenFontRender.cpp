@@ -584,11 +584,8 @@ uint16_t OpenFontRender::drawHString(const char *str,
 
 				FT_Glyph_Get_CBox(aglyph, FT_GLYPH_BBOX_PIXELS, &glyph_bbox);
 				if (isLineFirstChar == true) {
-					// Get bearing X
-					FT_Face aface;
-					FTC_Manager_LookupFace(_ftc_manager, &_face_id, &aface);
-					bearing_left.x = (aface->glyph->metrics.horiBearingX >> 6);
-					// nothing to do for bearing.y
+					// The face's glyph slot may still hold a different glyph on a cache hit.
+					bearing_left.x = glyph_bbox.xMin;
 					isLineFirstChar = false;
 				}
 
